@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+*.conda
+
+# 训练/推理产物 (模型/指标/预测结果/日志)
+models/
+artifacts/
+artifacts_baseline/
+artifacts_v14/
+logs/
+
+# 合并数据 (脚本生成)
+data/merged_bus.csv
+data/merged_branch.csv
+data/infer_bus.csv
+data/infer_branch.csv
+
+# 气象缓存
+data/weather_cache/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.log
