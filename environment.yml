@@ -1,0 +1,32 @@
+# ==============================================================================
+#  NILM-AC v5 Conda 环境定义 (Windows 10/11 适配)
+#  v5 新增: 温度特征 (Open-Meteo Archive API) + 温度驱动季节路由
+#
+#  使用方法:
+#      conda env create -f environment.yml
+#      conda activate nilm_ac
+#
+#  国内换源 (可选, 加速安装):
+#      conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/
+#      conda config --set show_channel_urls yes
+# ==============================================================================
+name: nilm_ac
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10                 # 3.10 与 sklearn 1.5.x 兼容性最稳定
+  - pip
+  # ===== 核心依赖 =====
+  - numpy=1.26.*
+  - pandas=2.2.*
+  - scikit-learn=1.5.*          # GradientBoostingRegressor + IsotonicRegression
+  - matplotlib=3.8.*            # 可视化 (中文字体自动适配)
+  - joblib=1.4.*                # 模型持久化
+  # ===== 性能优化 (可选) =====
+  - pyarrow                     # 加速 CSV / parquet 读写
+  # ===== v5 新增 =====
+  # 气象 API 调用使用 Python 内置 urllib, 无需 requests 依赖
+  # ===== 工程工具 (可选) =====
+  - pip:
+      - m2cgen==0.10.0          # 将 GBDT 导出为零依赖 C 代码 (用于 MCU 嵌入式部署)

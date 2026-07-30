@@ -1,0 +1,12 @@
+{
+  "800080252842_4206894986488": {
+    "_note_": "[v13.18-phase3 balanced 端到端] enable_auto_split=true, mode=balanced. splits/train/infer 由 apply_auto_split_to_config 运行时生成.",
+    "guard_enabled": false,
+    "target_col": "p1",
+    "enable_auto_split": true,
+    "auto_split_mode": "balanced",
+    "train": {"include": [["2025-07-10","2026-07-15"]], "exclude": []},
+    "infer": {"exclude": []}
+  },
+  "_default": {"train":{"exclude":[]}, "infer":{"exclude":[]}}
+}

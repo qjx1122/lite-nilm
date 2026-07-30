@@ -1,0 +1,72 @@
+{
+  "_comment_": "[v12/v13/v13.5/v13.16] 每用户批量配置示例. 完整支持 6 类字段: (1) time_filter 时段过滤 - 全局 train/infer 数据加载阶段的 include/exclude (v12, 配置在顶层 train:/infer: 字段); (2) d87 守卫开关 - guard_enabled 字段 (v13); (3) per-split time_filter - splits.train/val/test 三集独立 include/exclude (v13); (4) 目标分路列名 - target_col 字段 (v13/v13.4-fix/v13.16, 格式 pN 或 pA+pB[+pC...], N ≥ 0 整数, 优先级高于文件名 -Ch{N}- 反推); (5) [v13.5 新增] common 常量覆盖 - 9 个字段 (on_thr_w/split_ratios/split_strategy/post_min_on/post_fill_short_off/weather_latitude/weather_longitude/use_weather_features/use_temp_based_season), 未指定则用 common.py 默认; (6) _default 兜底. 用 --time-filter-config 传给 run_batch_users.py.",
+
+  "_v1316_composite_target_col_note_": "[v13.16] target_col 复合语义: 若填写 'p1+p2' 或 'p1+p2+p3', 加载分路 CSV 时自动新增一列 (列名就是复合字符串), 值 = 分量按行求和 (skipna=False, 任一分量缺则该行 NaN 传播). 分量正则: 每个 pN 须 N ≥ 0 整数. 空白/大小写不敏感 (P1 + p2 -> p1+p2). 防呆: 重复分量 (p1+p1) 拒绝. 用户示例 p1=[24,16,16,16] p2=[8,0,0,8] 配 'p1+p2' -> [32,16,16,24]. 向后兼容: 单列 'p1' 完全不触发物化. 使用场景: 同一空调有多个分路 (主机+辅热/多室内机), 需合并作为总标签.",
+
+
+
+  "_v135_common_overrides_note_": "[v13.5] common 常量覆盖字段完整说明: (a) on_thr_w: float, 空调 ON 判定阈值 (W), 训练+评估同口径, 默认 10.0; (b) split_ratios: [f,f,f], 训练/验证/测试比例, 和 = 1.0 (自动归一化), 默认 [0.6,0.2,0.2]; (c) split_strategy: 'stratified_day'/'stratified'/'time', 默认 stratified_day; (d) post_min_on: int >=0, 后处理最小连续 ON 步数, 默认 1; (e) post_fill_short_off: int >=0, 后处理短 OFF 间隙填充步数, 默认 3; (f) weather_latitude: -90~90 (跨城市部署), 默认 30.59 武汉; (g) weather_longitude: -180~180, 默认 114.31; (h) use_weather_features: bool, 是否启用温度特征, 默认 true (关掉会降 5-15% 精度); (i) use_temp_based_season: bool, 是否用温度驱动季节路由, 默认 true. 校验策略: 非法值 WARN + 忽略, 回退到 common.py 默认.",
+
+  "_semantics_v13_splits_": "[v13 per-split 语义] Step 1 原策略切分 (stratified_day) 得初始 train/val/test; Step 2 include 硬锚定 (样本粒度): 若样本 ∈ split X.include 则强制归 X, 冲突时按 train->val->test 顺序取第一个匹配并 WARN; Step 3 严格保持形状: include 强制导致某 split 过剩时, 从该 split 非锚定样本让出到不足的 split (跨 split 平移补齐); Step 4 exclude (样本粒度): 若样本已属 split X 且 t ∈ X.exclude 则移出该 split 送回重分配池, 若样本被 3 个 split.exclude 全部命中则完全丢弃.",
+
+  "800080270708_4206602981958": {
+    "_note_": "[v13 + v13.5 混合示例] 变频空调, 关闭守卫 + per-split 硬锚定 + v13.5 覆盖 3 项 common 常量",
+    "target_col": "p1",
+    "guard_enabled": false,
+    "on_thr_w": 50,
+    "split_ratios": [0.8, 0.1, 0.1],
+    "post_min_on": 2,
+    "splits": {
+      "train": {"exclude": [["2026-06-12", "2026-06-12"]]},
+      "val":   {"include": [["2026-06-20", "2026-06-20"]]},
+      "test":  {"include": [["2026-06-25", "2026-06-25"]]}
+    }
+  },
+
+  "_v135_full_example_": {
+    "_note_": "[v13.5 完整字段示例, 仅供参考 (键名开头下划线自动跳过, 不当用户处理)]",
+    "target_col": "p2",
+    "guard_enabled": true,
+    "on_thr_w": 50.0,
+    "split_ratios": [0.7, 0.15, 0.15],
+    "split_strategy": "stratified_day",
+    "post_min_on": 2,
+    "post_fill_short_off": 3,
+    "weather_latitude": 39.90,
+    "weather_longitude": 116.40,
+    "use_weather_features": true,
+    "use_temp_based_season": true,
+    "train": {"exclude": []},
+    "infer": {"exclude": []},
+    "splits": {}
+  },
+
+  "800080252842_4206894986488": {
+    "_note_": "[v13 混合示例] 全局排除 4/2 高峰/6/5 高峰/6/29 脏日 (v12 顶层 train.exclude), 且 val 强制包含 6/1 (v13 splits.val.include)",
+    "guard_enabled": false,
+    "train": {
+      "exclude": [
+        ["2026-04-02 17:45", "2026-04-02 23:59:59"],
+        ["2026-06-05 09:30", "2026-06-05 14:30"],
+        ["2026-06-29", "2026-06-29"]
+      ]
+    },
+    "splits": {
+      "val": {
+        "include": [
+          ["2026-06-01", "2026-06-01"]
+        ]
+      }
+    }
+  },
+
+  "_v1316_composite_example_": {
+    "_note_": "[v13.16 复合目标列示例] 用户有 2 个分路 (p1 主机 + p2 辅热), 想把它们合并作为总空调标签. 加载分路 CSV 时 load_branch_csv 会自动物化列 'p1+p2' = 逐行 p1 + p2. 三分量场景改成 'p1+p2+p3' 同理. 键名开头下划线, 不当真实用户处理.",
+    "target_col": "p1+p2",
+    "guard_enabled": false
+  },
+
+  "_default": {
+    "_note_": "[v13] _default 不写 guard_enabled -> 让未列出的用户走自动检测 (前提: common.D87_ADAPTIVE_GUARD_ENABLED=True)"
+  }
+}
