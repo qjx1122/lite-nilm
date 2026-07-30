@@ -96,7 +96,10 @@ def resample_and_align(bus_df, branch_df=None, keep_cols=None,
     #   但默认 resample("15min").mean() 会把 -224 的尖峰平滑到 -62,
     #   导致模型完全无法学到这一可靠的物理签名 (-> 推理 SAE 46.87% Bug 根因).
     # 因此对 SPIKE_COLS 额外保留 5min 内的 max/min/abs_max 三个聚合.
-    # 处理 keep_cols 中可能已包含衍生列名 (例如推理时 top_cols 含 _max5):
+    # [v14 fix] 训推一致性: 推理时 keep_cols=top_cols 可能不含 d87 源列
+    #   (因为 top_cols 来自相关性 Top-25, d87 直接相关性可能低, 但其极值列很重要),
+    #   必须强制把 DEFAULT_SPIKE_COLS 加入 raw_keep_cols, 保证派生列 _max5 等
+    #   在训练/推理两侧都被生成.
     SPIKE_SUFFIXES = ("_max5", "_min5", "_absmax5")
     raw_keep_cols = [c for c in keep_cols if not c.endswith(SPIKE_SUFFIXES)]
     # 从 keep_cols 中推断出 spike 源列 (如 keep_cols 含 load_iden_data87_max5,
@@ -113,6 +116,11 @@ def resample_and_align(bus_df, branch_df=None, keep_cols=None,
     spike_cols_all = sorted(set(DEFAULT_SPIKE_COLS) | requested_spike_bases)
     # 源列只需在 bus_df 中存在 (推理时 top_cols 可能只含派生列 _max5)
     spike_cols_present = [c for c in spike_cols_all if c in bus_df.columns]
+    # [v14 fix] 关键: 把 spike 源列也加入 raw_keep_cols, 确保它们进入 mean 聚合
+    #  (否则推理侧 df 中缺失 d87 原始列, d87_jump_abs5 等事件特征无法构造)
+    for c in spike_cols_present:
+        if c not in raw_keep_cols:
+            raw_keep_cols.append(c)
 
     # 1) 主分支: raw_keep_cols 的 mean 聚合
     bus_for_mean = bus_df.set_index("event_time")[raw_keep_cols]
@@ -316,6 +324,21 @@ def build_features(df: pd.DataFrame, top_cols: list,
         # 避免除 0: 分母 + 1.0 (典型功率量级 100~1000W, 加 1 无影响)
         X[f"{c}_ratio_ema"] = (ema2 / (ema24 + 1.0)).fillna(1.0)
 
+    # ============================================================
+    # [v14 方向⑧新增] NILM 物理指纹增强特征 (约 32 维)
+    # ============================================================
+    # 设计依据 (NILM 领域最佳实践):
+    #   (A) 功率比率/比值特征: 有功/视在代理 -> 负荷类型指纹
+    #       (定频阻性 ≈ 1, 变频感性 ≈ 0.6-0.8, 开关电源 ≈ 0.5-0.7)
+    #   (B) 多尺度波动纹理: std/CV 在 {1h, 3h, 6h, 24h} 窗口
+    #       区分 稳态ON / 瞬态切换 / 待机OFF 三类工况
+    #   (C) 功率水平分位数代理: 滚动 P25/P75 -> 变频空调的档位特征
+    #   (D) 斜率/趋势特征: 线性回归斜率 -> 升档/降档/稳态判别
+    #   (E) 时间上下文: 距上次开/关机时长; 当前时刻距当日首个启动点
+    #   (F) 跨列比值特征: 多电参量间的比值 (物理不变量)
+    # ============================================================
+    _add_nilm_physics_features(X, df, top_cols)
+
     # --- (4) 时间特征 (含周期编码 + 季节) ---
     ts = df.index
     X["hour"] = ts.hour
@@ -485,3 +508,109 @@ def _monthly_climatology_for_index(ts_index: pd.DatetimeIndex) -> np.ndarray:
     """返回每个时间戳对应的"30 年武汉同期气候平均"温度"""
     from weather_utils import MONTHLY_AVG_TEMP_WUHAN
     return np.array([MONTHLY_AVG_TEMP_WUHAN[m] for m in ts_index.month])
+
+
+# ============================================================
+# [v14] NILM 物理指纹增强特征 (方向⑧)
+# ============================================================
+def _add_nilm_physics_features(X: pd.DataFrame, df: pd.DataFrame,
+                                top_cols: list) -> None:
+    """
+    向 X 原地追加 NILM 领域物理指纹特征 (约 32 维):
+      (B) 多尺度波动纹理 (Top-3 × {1h, 3h, 6h} × {std, cv}) = 18 维
+      (C) 分位数差 (Top-3 × {1h, 3h} × {p25, p75, iqr}) = 6 维  [注: iqr=1维/尺度,共6]
+      (D) 滚动斜率 (Top-2 × {1h, 3h}) = 4 维
+      (E) 跨列比值 (Top-3 主功率列之间) = 3 维
+      (F) 相对基线偏离 (主功率 × {24h mean, 7d mean}) = 2 维
+
+    注:
+      - 不用当前时刻 y_ac (标签) 构造任何特征, 避免泄漏
+      - 所有 rolling/ewm 都用 min_periods=1 保证首步不产 NaN
+      - fillna(0) 处理首步除零等边界
+    """
+    # 主功率列: top_cols[0] 通常为 load_iden_data73 (总线有功功率代理)
+    main_power_col = top_cols[0] if len(top_cols) > 0 else None
+
+    # ---- (B) 多尺度波动纹理 ----
+    # 窗口列表 (单位: 15min 步 -> 1h=4, 3h=12, 6h=24)
+    WINDOWS = [4, 12, 24]
+    # 用前 3 个最相关电参量
+    texture_cols = top_cols[:3]
+    for c in texture_cols:
+        s = df[c]
+        for w in WINDOWS:
+            r = s.rolling(window=w, min_periods=1)
+            std_w = r.std().fillna(0)
+            mean_w = r.mean().fillna(0)
+            # 标准差 (绝对波动)
+            X[f"{c}_std_{w}"] = std_w
+            # 变异系数 CV (相对波动), 分母 clip 防 0
+            cv = std_w / (mean_w.abs().clip(lower=10.0))
+            X[f"{c}_cv_{w}"] = cv.fillna(0)
+
+    # ---- (C) 分位数差 (IQR = P75-P25, 反映功率档位宽度) ----
+    if main_power_col is not None:
+        s = df[main_power_col]
+        for w in [4, 12]:
+            r = s.rolling(window=w, min_periods=1)
+            p25 = r.quantile(0.25).fillna(method="bfill").fillna(0)
+            p75 = r.quantile(0.75).fillna(method="bfill").fillna(0)
+            X[f"{main_power_col}_p25_{w}"] = p25
+            X[f"{main_power_col}_p75_{w}"] = p75
+            X[f"{main_power_col}_iqr_{w}"] = (p75 - p25).fillna(0)
+        # 注: 上面实际写 3 列 × 2 窗口 = 6 维 (p25/p75/iqr)
+
+    # ---- (D) 滚动斜率 (线性回归 slope, 1h/3h 窗口) ----
+    # 用 OLS 闭式解: slope = cov(x, t) / var(t), 其中 t=[0,1,...,w-1]
+    # pandas rolling.cov 稳定支持变长窗口, 首窗 min_periods=2 起开始计算
+    # slope 单位: W/step, 升档为正, 降档为负, 稳态 ≈ 0
+    if main_power_col is not None:
+        s = df[main_power_col].astype(float)
+        for w in [4, 12]:
+            t_index = pd.Series(np.arange(len(s)), index=s.index, dtype=float)
+            # 注意: rolling.cov 要求两侧等长, 用 win_type=None (等权)
+            cov_st = s.rolling(window=w, min_periods=2).cov(t_index)
+            # var(t) = (w^2-1)/12 对完整窗 w, 短窗时按实际长度 n 重算
+            # 用 rolling count 计算实际窗长
+            n_eff = s.rolling(window=w, min_periods=2).count()
+            var_t_series = (n_eff * n_eff - 1.0) / 12.0
+            slope = (cov_st / var_t_series).fillna(0.0)
+            X[f"{main_power_col}_slope_{w}"] = slope.values
+        # 第二主功率列 (通常 d74) 1h 斜率 (捕捉瞬态升档)
+        if len(top_cols) > 1:
+            s2 = df[top_cols[1]].astype(float)
+            w = 4
+            t_index = pd.Series(np.arange(len(s2)), index=s2.index, dtype=float)
+            cov_st = s2.rolling(window=w, min_periods=2).cov(t_index)
+            n_eff = s2.rolling(window=w, min_periods=2).count()
+            var_t = (n_eff * n_eff - 1.0) / 12.0
+            slope2 = (cov_st / var_t).fillna(0.0)
+            X[f"{top_cols[1]}_slope_{w}"] = slope2.values
+
+    # ---- (F) 相对基线偏离 (相对于 24h/7d 均值) ----
+    if main_power_col is not None:
+        s = df[main_power_col]
+        base_24h = s.rolling(window=96, min_periods=1).mean().bfill()
+        base_7d  = s.rolling(window=672, min_periods=1).mean().bfill()
+        X[f"{main_power_col}_dev_24h"] = (s - base_24h).fillna(0)
+        X[f"{main_power_col}_dev_7d"]  = (s - base_7d).fillna(0)
+        # 归一化偏离 (z-score 代理, 用于跨用户)
+        std_24h = s.rolling(window=96, min_periods=1).std().bfill().clip(lower=5.0)
+        X[f"{main_power_col}_z_24h"] = ((s - base_24h) / std_24h).fillna(0)
+
+    # ---- (E) 跨列比值 (主功率列之间的相对比例) ----
+    # 仅对 Top-2 对做比值, 避免维度爆炸; 使用 |a| / (|b| + eps) 形式
+    if len(top_cols) >= 2:
+        c0, c1 = top_cols[0], top_cols[1]
+        s0, s1 = df[c0].abs(), df[c1].abs().clip(lower=5.0)
+        X[f"ratio_{c0}_over_{c1}"] = (s0 / s1).replace([np.inf, -np.inf], 1.0).fillna(1.0)
+    if len(top_cols) >= 3:
+        c0, c2 = top_cols[0], top_cols[2]
+        s0, s2 = df[c0].abs(), df[c2].abs().clip(lower=5.0)
+        X[f"ratio_{c0}_over_{c2}"] = (s0 / s2).replace([np.inf, -np.inf], 1.0).fillna(1.0)
+    # d87 启动尖峰列与主功率的比值 (若存在)
+    d87_col = "load_iden_data87"
+    if d87_col in df.columns and main_power_col is not None:
+        s_main = df[main_power_col].abs().clip(lower=50.0)
+        s_d87  = df[d87_col].abs()
+        X["ratio_d87_over_main"] = (s_d87 / s_main).replace([np.inf, -np.inf], 0).fillna(0)
