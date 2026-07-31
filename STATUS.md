@@ -6,7 +6,8 @@
 ## 当前目标
 - 已完成（2026-07-31 session 2）：**5 用户 v14 批量重跑 + 与上版对比 + 逐用户逐日问题详析** → 交付 `V14_RERUN_ANALYSIS.md`
 - 已完成（2026-07-31/08-01 session 3）：**P0–P2 整改路线图执行 + 全量重验** → 交付 `V14_REMEDIATION_REPORT.md`
-- 下一会话：待指派（候选：8 月数据回流入训后复测 U0800/U0778 尾部未愈项；U0789 分路建模专题）
+- 已完成（2026-08-01 session 4）：**推理集扩充 6 月训练窗外 OOD 验证 + 逐日详析 + 共性梳理** → 交付 `V14_JUNE_EXT_ANALYSIS.md`
+- 下一会话：待指派（候选：P-CE1 泛化守卫 / P-CE5 guard 滑窗锚 / P-CE6 日报 coverage 列 / 8 月数据回流）
 
 ## 已完成
 - [x] v14 收尾（session 1）：93 组 v14 单测全过 + symmetry 测试可移植性修复 + 烟测/工具链实测
@@ -29,15 +30,22 @@
 - [x] **终验 5 用户全量重跑 546.5s 全 ok**：F1/P/R/TP/FP/FN 与基线逐位一致（零回归实证）
 - [x] 交付 `V14_REMEDIATION_REPORT.md`（逐项「做了什么/参数出处/验证数字/未愈声明」）
 
+## 已完成（session 4 扩充验证）
+- [x] **推理集扩充**: 5 用户 6 月训练窗外日全部入推理集 (U842 至6/30; U2844/U0789 6/5-30; U0778 6/9-30; U0800 6/2-30), 全量重跑 485.2s 5/5 ok
+- [x] **回归闸**: 7 月段 U842/U0800 与 v14.3 终验逐位一致; U0778/U0789 ±0.3~0.9pp (尾窗特征公差); U2844 漂移已查实=P-CE5
+- [x] **核心新发现**: P-CE1 电路归属错位虚块 (U0789 11d/630步, U0800 17d/716步恒定40步, U0778 2d/95步; bus 实测中午块 0.6~1.5kW>ON 日水位, 非分类器错误); P-CE2 梅雨崩塌新增 U842 6/8、U2844 6/22(guard误杀); P-CE3 6月高估↔7月低估双向档位漂移直接印证
+- [x] **P-CE5 查实**: bus_guard pwr_scale 全窗池化, June 入窗后 0.953→1.000, U2844 7月 SAE 8.3→13.2% (7/5 反改善 48%→17.4%)
+- [x] 交付 `V14_JUNE_EXT_ANALYSIS.md` (口径声明/回归闸/5用户逐日表/P-CE1~CE8 共性+修复路径)
+
 ## 进行中
 - （无）
 
 ## 下一步（TODO，按优先级）
-1. **8 月数据回流**后复测：U0800 尾部高温段（SAE 45%）、U0778 7/14-7/15 LUT 热端外、U0789 7/15 双开大功率
-2. **U842 7/6 梅雨联合分布外**：业务侧补采梅雨极端日 ON 样本回流入训（数据题非模型题）
-3. **U0789 分路/双开状态建模**（p1+p2 复合拆解，独立专题）
-4. **U2844 7/5 中档偏弱 ON**：8 月数据或专用增强
-5. （长期）V14 报告 §九 P1-P3 roadmap
+1. **P-CE1 泛化 bus_guard 到三小用户**（需先落 P-CE8 防误杀门: force-off 前"分路连续0+bus块功率≈目标档位"双重门）
+2. **P-CE5 guard 自适应锚改逐日/滑窗**（K 由训练侧 val 选型）→ 修复 U2844 扩窗回归
+3. **P-CE6 日报加 coverage 列**（n_bus_raw/n_branch_raw 对 96 步比对，轻量）
+4. **8 月数据回流**后复测: P-CE2 梅雨样本、CE3 LUT 基准重构、U0800 尾部高温
+5. **U0789 分路/双开状态建模**（独立专题；CE1 确认后优先级升）
 
 ## 决策记录 / 踩坑
 - **⚠️ venv 不跨 session 持久**：bash 快照剔除 `.venv`，每个新 session 开头必须 `python3 -m venv .venv && pip install -r requirements.txt`（~25s）；需 lightgbm 时另装（~3s）
@@ -53,8 +61,8 @@
 - 5σ 异常/focal gamma 测试设计踩坑记录见 git log（session 1 commit）
 
 ## 关键文件路径
-- `STATUS.md` — 本文件 | `V14_REMEDIATION_REPORT.md` — **最新主交付**（P0-P2 整改验证）
-- `V14_RERUN_ANALYSIS.md` — v14 基线对比+逐日详析+路线图 | `V14_BATCH_COMPARISON.md` / `V14_DAILY_METRICS_ANALYSIS.md` — 上版对比基线
+- `STATUS.md` — 本文件 | `V14_JUNE_EXT_ANALYSIS.md` — **最新主交付**（6 月扩段 OOD+共性梳理）
+- `V14_REMEDIATION_REPORT.md` — P0-P2 整改验证 | `V14_RERUN_ANALYSIS.md` — v14 基线对比+逐日详析+路线图 | `V14_BATCH_COMPARISON.md` / `V14_DAILY_METRICS_ANALYSIS.md` — 上版对比基线
 - `data/time_filters.json` — 5 用户最终配置（U2844 bus_guard+direction=both；3 用户 power_temp_calib+calib_stats_include）
 - `scripts/power_temp_calib.py` — 温桶标定/时段先验（含 direction=both cap=p90 对称模式）
 - `results_v6_15_0/` — 一致性测试符号链接农场（已 .gitignore，供 test_train_infer_symmetry 实跑）
