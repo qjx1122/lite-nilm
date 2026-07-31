@@ -237,6 +237,46 @@ check(keys6.index("n_samples") < keys6.index("n_bus_raw") < keys6.index("Accurac
 check(keys6.index("TN") < keys6.index("is_on_day"), "T6.11 新 4 列在 TN 之后")
 
 # ============================================================
+# T7. apply_power_temp_calib direction="both" 上限帽 (v14.3 对称下压)
+# ============================================================
+print("=" * 70)
+print(" T7. direction='both': 下压 cap=p90 / lift 保留 / 死区 / 默认不变")
+print("=" * 70)
+lut_t7 = {"bin_width": 2.0, "on_thr": 50.0, "min_n": 20,
+          "bins": {"30.0_32.0": {"p25": 600.0, "p50": 700.0, "p90": 900.0,
+                                 "on_mean": 710.0, "n": 50}}}
+ts7 = pd.date_range("2026-07-01 12:00", periods=5, freq="15min")
+wdf7 = pd.DataFrame({"temperature_2m": [31.0] * 5}, index=ts7)
+# y: [低高估] 1500 应被压到 900; 500 应上抬到 0.85*700=595; 920 微超帽在死区内不动; 860 帽下不动; 状态0 不动
+y7 = np.array([1500.0, 500.0, 920.0, 860.0, 700.0])
+st7 = np.array([1, 1, 1, 1, 0])
+t7_expected = [900.0, 595.0, 920.0, 860.0, 700.0]
+y7b, info7 = apply_power_temp_calib(y7, st7, ts7, wdf7, lut_t7,
+                                    gamma=0.85, direction="both", cap_stat="p90")
+for i, exp_v in enumerate(t7_expected):
+    check(abs(y7b[i] - exp_v) < 1e-9,
+          f"T7.{i+1} y[{i}]={y7b[i]} (期望 {exp_v})")
+check(info7["n_capped"] == 1 and info7["n_lifted"] == 1,
+      f"T7.6 下压数={info7['n_capped']}(期望1) 上抬数={info7['n_lifted']}(期望1)")
+check(abs(info7.get("mean_cut_w", 0) - 600.0) < 1e-9,
+      f"T7.7 mean_cut_w={info7.get('mean_cut_w')} (期望 600)")
+# 默认 direction=lift: 1500 不动 (回归零变化保护)
+y7l, info7l = apply_power_temp_calib(y7, st7, ts7, wdf7, lut_t7, gamma=0.85)
+check(abs(y7l[0] - 1500.0) < 1e-9, f"T7.8 默认 lift 模式不下压 (y[0]={y7l[0]})")
+check(info7l["n_capped"] == 0, "T7.9 默认模式 n_capped=0")
+# 非法 direction -> 显式报错 (防配置手误静默)
+try:
+    apply_power_temp_calib(y7, st7, ts7, wdf7, lut_t7, direction="down")
+    check(False, "T7.10 非法 direction 未报错")
+except ValueError as e7:
+    check("direction" in str(e7), f"T7.10 非法 direction 显式 ValueError ({e7})")
+# 有帽无桶: 温度在无覆盖桶 -> 不下压不外推
+wdf7b = pd.DataFrame({"temperature_2m": [40.0] * 5}, index=ts7)
+y7c, info7c = apply_power_temp_calib(y7, st7, ts7, wdf7b, lut_t7,
+                                     gamma=0.85, direction="both", cap_stat="p90")
+check(abs(y7c[0] - 1500.0) < 1e-9, "T7.11 无桶覆盖不下压 (1500 保持)")
+
+# ============================================================
 # 汇总
 # ============================================================
 print("=" * 70)

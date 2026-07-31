@@ -136,12 +136,17 @@ def apply_power_temp_calib(y_pred, state_pred, ts_index, weather_df,
                            gamma: float = 0.85,
                            stat: str = "p50",
                            min_gain: float = 1.05,
+                           direction: str = "lift",
+                           cap_stat: str = "p90",
                            logger=None) -> Tuple[np.ndarray, Dict[str, Any]]:
     """
-    对 state==1 的点做"温桶期望功率"下限标定 (只升不降):
+    对 state==1 的点做"温桶期望功率"标定:
 
-        floor_i = gamma * LUT[stat](temp_i)     (LUT 无覆盖 -> 跳过)
-        若 floor_i / pred_i >= min_gain:  pred_i <- floor_i
+        [下限, 恒生效]      floor_i = gamma * LUT[stat](temp_i)
+                            若 floor_i / pred_i >= min_gain:  pred_i <- floor_i
+        [上限, direction="both" 时生效]
+                            cap_i = LUT[cap_stat](temp_i)   (训练期同桶 ON 功率 p90)
+                            若 pred_i / cap_i >= min_gain:  pred_i <- min(pred_i, cap_i)
 
     参数:
         y_pred:    推理预测功率 (W)
@@ -150,14 +155,23 @@ def apply_power_temp_calib(y_pred, state_pred, ts_index, weather_df,
         weather_df: 推理期气象 (含 temperature_2m)
         lut_pack:  build_branch_temp_power_lut 产物 (训练侧统计)
         gamma:     收缩系数 (默认 0.85, 向训练期望收缩 15%, 保留日内形状)
-        stat:     LUT 分位 (默认 p50; p90 更激进)
+        stat:     LUT 下限分位 (默认 p50; p90 更激进)
         min_gain: 死区比 (默认 1.05 = 差异 <5% 不动, 抗抖)
+        direction: "lift" (默认, 只升不降, 治低估) / "both" (升降皆可, 治低估+极致高估)
+        cap_stat: 上限分位 (默认 p90; 训练侧同温桶 ON 功率 p90, 零评估集参数)
+                   设计依据 (U2844 案例): 训练 ON 均 766W vs 7月实测 693W (+10.5%),
+                   其极端日间 MAE 峰值来自回归头外推过头; 只剪 p90 以上的
+                   "训练期从未出现的功率段", 中心趋势仍交给 bus_guard 功率标定.
     """
-    info: Dict[str, Any] = {"applied": False, "n_lifted": 0,
+    info: Dict[str, Any] = {"applied": False, "n_lifted": 0, "n_capped": 0,
                             "n_on": int(np.sum(np.asarray(state_pred) == 1)),
-                            "n_no_bucket": 0, "gamma": gamma, "stat": stat}
+                            "n_no_bucket": 0, "gamma": gamma, "stat": stat,
+                            "direction": direction}
     y = np.asarray(y_pred, dtype=float).copy()
     st = np.asarray(state_pred, dtype=int)
+    if direction not in ("lift", "both"):
+        raise ValueError(f"[v14.2 power_temp_calib] direction={direction!r} 非法, "
+                         f"仅支持 'lift' / 'both'")
     if lut_pack is None or not (lut_pack.get("bins") if isinstance(lut_pack, dict) else None):
         info["skip"] = "no_lut"
         return y, info
@@ -179,12 +193,26 @@ def apply_power_temp_calib(y_pred, state_pred, ts_index, weather_df,
     need = on & has_bucket & (y > 1) & (floors > 1) & ((floors / np.maximum(y, 1e-9)) >= min_gain) & (floors > y)
     y[need] = floors[need]
     info["n_lifted"] = int(need.sum())
-    info["applied"] = info["n_lifted"] > 0
     if info["n_lifted"] > 0:
         info["mean_lift_w"] = float((floors[need] - np.asarray(y_pred, dtype=float)[need]).mean())
+
+    # ---- 上限帽 (仅 direction="both"): 剪掉"训练期同温桶从未出现的功率段" ----
+    if direction == "both":
+        caps = lut_expected_power(lut_pack, temps, stat=cap_stat)
+        has_cap = np.isfinite(caps)
+        need_cap = on & has_cap & (caps > 1) & (y > caps) & ((y / np.maximum(caps, 1e-9)) >= min_gain)
+        info["n_capped"] = int(need_cap.sum())
+        if info["n_capped"] > 0:
+            info["mean_cut_w"] = float((np.asarray(y_pred, dtype=float)[need_cap] - caps[need_cap]).mean())
+        y[need_cap] = caps[need_cap]
+
+    info["applied"] = (info["n_lifted"] > 0) or (info["n_capped"] > 0)
     if logger is not None:
-        logger.info(f"  [v14.2 power_temp_calib] ON={info['n_on']}, 上抬 {info['n_lifted']} 步 "
-                    f"(无桶覆盖 {n_no_bucket} 步), gamma={gamma}, stat={stat}, min_gain={min_gain}")
+        _msg = (f"  [v14.2 power_temp_calib] ON={info['n_on']}, 上抬 {info['n_lifted']} 步 "
+                f"(无桶覆盖 {n_no_bucket} 步), gamma={gamma}, stat={stat}, min_gain={min_gain}")
+        if direction == "both":
+            _msg += f" | 下压 {info['n_capped']} 步 (cap={cap_stat})"
+        logger.info(_msg)
     return y, info
 
 

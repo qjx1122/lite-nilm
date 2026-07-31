@@ -67,10 +67,20 @@ print("="*100)
 print(f"[INFO] PROJECT_ROOT = {ROOT}")
 print(f"[INFO] RESULT_ROOT  = {RESULT_ROOT}")
 
-USERS = ['user1_270848', 'user2_252844', 'user3_270825']
+USERS_LEGACY = ['user1_270848', 'user2_252844', 'user3_270825']
 
 def _pred_csv(u):
     return RESULT_ROOT / u / 'predictions' / 'inference_result.csv'
+
+# [v14.3] 动态发现: 旧活动用户(user1_270848 等)不在时, 自动扫描 RESULT_ROOT
+# 下所有含 predictions/inference_result.csv 的用户目录, 保证测试可移植到新批次.
+if RESULT_ROOT.exists():
+    _legacy_hit = [u for u in USERS_LEGACY if _pred_csv(u).exists()]
+    USERS = _legacy_hit if _legacy_hit else sorted(
+        d.name for d in RESULT_ROOT.iterdir()
+        if d.is_dir() and (d / 'predictions' / 'inference_result.csv').exists())
+else:
+    USERS = USERS_LEGACY
 
 n_available = sum(1 for u in USERS if _pred_csv(u).exists())
 if not RESULT_ROOT.exists() or n_available == 0:

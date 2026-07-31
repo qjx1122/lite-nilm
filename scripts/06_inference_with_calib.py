@@ -28,7 +28,8 @@ from common import (INFER_BUS_CSV, INFER_BR_CSV,    # v6.12.6+v6.15.0 推理路�
                     SUMMER_TEMP_THRESHOLD, WINTER_TEMP_THRESHOLD,
                     get_logger, Timer)
 from feature_utils import (load_bus_csv, load_branch_csv,
-                           resample_and_align, build_features)
+                           resample_and_align, build_features,
+                           align_features_to_bundle)
 from postprocess import apply_postprocess
 from expert_utils import assign_season, SEASON_LABELS
 from weather_utils import get_weather_for_period
@@ -195,6 +196,8 @@ def main():
         X_df = build_features(df, top_cols, weather_df=weather_df,
                               temp_power_lut=bundle.get("temp_power_lut"))
         log.info(f"  对齐 + 特征 shape={X_df.shape}")
+        # [v14.3] 训练/推理特征对齐 (特征黑名单场景)
+        X_df = align_features_to_bundle(X_df, bundle, logger=log, ctx="06_calib")
 
         # 季节标签
         if use_temp_based_season and weather_df is not None:

@@ -445,7 +445,9 @@ def run_single_user(info, output_dir, skip_existing=False, log_file=None,
                     v14_flags_spec="",
                     bus_guard_json="",
                     power_temp_calib_json="",
-                    time_prior_json=""):
+                    time_prior_json="",
+                    exclude_features="",
+                    calib_stats_json=""):
     """对单个用户调用 run_user_pipeline.py
 
     [v6.12.6+v6.15.0-graceful-v7] 三态返回:
@@ -520,6 +522,16 @@ def run_single_user(info, output_dir, skip_existing=False, log_file=None,
         sub_env["NILM_TIME_PRIOR_JSON"] = time_prior_json
     else:
         sub_env.pop("NILM_TIME_PRIOR_JSON", None)
+    # [v14.3] 特征黑名单 (训练端, 如 "dow,is_weekend"): 反日历记忆捷径
+    if exclude_features:
+        sub_env["NILM_EXCLUDE_FEATURES"] = exclude_features
+    else:
+        sub_env.pop("NILM_EXCLUDE_FEATURES", None)
+    # [v14.4] 解耦统计窗 (训练端): 温桶LUT/时段先验用更宽训练侧日期窗重建
+    if calib_stats_json:
+        sub_env["NILM_CALIB_STATS_SPEC"] = calib_stats_json
+    else:
+        sub_env.pop("NILM_CALIB_STATS_SPEC", None)
     try:
         if log_file:
             with open(log_file, "a", encoding="utf-8") as lf:
@@ -975,6 +987,8 @@ def main():
             # [v14.2] power_temp_calib / time_prior 用户级配置 (推理端可选标定)
             _power_temp_calib_json = ""
             _time_prior_json = ""
+            _exclude_features = ""  # [v14.3] 训练端特征黑名单
+            _calib_stats_json = ""  # [v14.4] 解耦统计窗
             if isinstance(_ucfg, dict):
                 import json as _json_batch2
                 _pc = _ucfg.get("power_temp_calib")
@@ -985,6 +999,16 @@ def main():
                 if isinstance(_tpr, dict) and _tpr.get("enable", False):
                     _time_prior_json = _json_batch2.dumps(_tpr, ensure_ascii=False)
                     print(f"  [v14.2] time_prior 启用: {_time_prior_json}")
+                _exf = _ucfg.get("exclude_features")
+                if isinstance(_exf, list) and all(isinstance(c, str) for c in _exf):
+                    _exclude_features = ",".join(_exf)
+                    print(f"  [v14.3] exclude_features 启用: {_exclude_features}")
+                _csi = _ucfg.get("calib_stats_include")
+                if isinstance(_csi, list) and _csi and all(
+                        isinstance(r, list) and len(r) == 2 for r in _csi):
+                    _calib_stats_json = _json_batch2.dumps(
+                        {"include": _csi}, ensure_ascii=False)
+                    print(f"  [v14.4] calib_stats_include 启用: {_csi}")
 
         t0 = datetime.now()
         status, msg = run_single_user(u, output_dir, args.skip_existing, log_path,
@@ -997,7 +1021,9 @@ def main():
                                        v14_flags_spec=_v14_flags_str,
                                        bus_guard_json=_bus_guard_json,
                                        power_temp_calib_json=_power_temp_calib_json,
-                                       time_prior_json=_time_prior_json)
+                                       time_prior_json=_time_prior_json,
+                                       exclude_features=_exclude_features,
+                                       calib_stats_json=_calib_stats_json)
         t1 = datetime.now()
         dt = (t1 - t0).total_seconds()
         icon  = STATUS_ICON.get(status, "?")

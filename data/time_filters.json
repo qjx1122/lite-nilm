@@ -1,299 +1,335 @@
 {
-  "_comment_": "[v14 OOD评估] 所有用户仅修改 train/infer 时段过滤: 2026-07-01前用于训练, 2026-07-01及以后用于推理; 其他配置(guard_enabled/target_col/on_thr_w/splits/enable_auto_split等)保持8bc0490原始版本不变.",
-  "800080252842_4206894986488": {
-    "_note_": "[P0 low/mid+hardOFF v3 conservative] train: ≤6/4 + 中档偏弱ON(6/10,11,16) + 难OFF(6/12,15,29); 不含极端低档6/8,9,19(防七月高档回归). splits.train.include强制进train. infer: 6/5-29剔除训练日 + ≥7/1. guard=false, v14.",
-    "guard_enabled": false,
-    "target_col": "p1",
-    "enable_auto_split": true,
-    "auto_split_mode": "balanced",
-    "train": {
-      "include": [
-        [
-          "2025-07-10",
-          "2026-06-04"
-        ],
-        [
-          "2026-06-10",
-          "2026-06-12"
-        ],
-        [
-          "2026-06-15",
-          "2026-06-16"
-        ],
-        [
-          "2026-06-29",
-          "2026-06-29"
-        ]
-      ]
-    },
-    "infer": {
-      "include": [
-        [
-          "2026-06-05",
-          "2026-06-29"
-        ],
-        [
-          "2026-07-01",
-          "2026-12-31"
-        ]
-      ],
-      "exclude": [
-        [
-          "2026-06-10",
-          "2026-06-12"
-        ],
-        [
-          "2026-06-15",
-          "2026-06-16"
-        ],
-        [
-          "2026-06-29",
-          "2026-06-29"
-        ]
-      ]
-    },
-    "v14": {
-      "v14_enable": true,
-      "physics": true,
-      "focal": true,
-      "ensemble": true,
-      "calibrate": false,
-      "auto_config": true,
-      "health": true,
-      "diag": true
-    },
-    "splits": {
-      "train": {
-        "include": [
-          [
-            "2026-06-04",
-            "2026-06-04"
-          ],
-          [
-            "2026-06-10",
-            "2026-06-12"
-          ],
-          [
-            "2026-06-15",
-            "2026-06-16"
-          ],
-          [
-            "2026-06-29",
-            "2026-06-29"
-          ]
-        ]
-      },
-      "val": {
-        "include": []
-      },
-      "test": {
-        "include": []
-      }
-    }
+ "_comment_": "[v14 OOD评估] 所有用户仅修改 train/infer 时段过滤: 2026-07-01前用于训练, 2026-07-01及以后用于推理; 其他配置(guard_enabled/target_col/on_thr_w/splits/enable_auto_split等)保持8bc0490原始版本不变.",
+ "800080252842_4206894986488": {
+  "_note_": "[v14.3-已定案] P0v3 基线还原: E1(去天气)/E2(6月梅雨日回流)/E3(去dow) 三实验证伪后回退 — 7/6 为极端梅雨复合分布外单日(线性探针亦失败), 训练侧无对应ON样本可学, 标记未愈(P8), 需业务补采梅雨ON标签.",
+  "guard_enabled": false,
+  "target_col": "p1",
+  "enable_auto_split": true,
+  "auto_split_mode": "balanced",
+  "train": {
+   "include": [
+    [
+     "2025-07-10",
+     "2026-06-04"
+    ],
+    [
+     "2026-06-10",
+     "2026-06-12"
+    ],
+    [
+     "2026-06-15",
+     "2026-06-16"
+    ],
+    [
+     "2026-06-29",
+     "2026-06-29"
+    ]
+   ]
   },
-  "800080252844_4206894986488": {
-    "_note_": "[v13+v14.1] 变频空调用户; d87尖峰弱关闭d87守卫; 启用总线一致性守卫+功率标定解决7月OFF日误报与ON日漏检/低估.",
-    "guard_enabled": false,
-    "target_col": "p2",
-    "splits": {
-      "train": {
-        "include": []
-      },
-      "val": {
-        "include": []
-      },
-      "test": {
-        "include": []
-      }
-    },
-    "train": {
-      "include": [
-        [
-          "2025-07-10",
-          "2026-06-04"
-        ]
-      ]
-    },
-    "infer": {
-      "include": [
-        [
-          "2026-07-01",
-          "2026-12-31"
-        ]
-      ]
-    },
-    "bus_guard": {
-      "enabled": true,
-      "version": "v14.1.1_d87_day_power",
-      "d87_col": "load_iden_data87",
-      "day_absmax_th": 110.0,
-      "startup_thr": 0.4,
-      "use_original_state_if_higher": true,
-      "post_min_on": 1,
-      "post_fill_short_off": 3,
-      "power_calib_enable": true,
-      "train_on_mean_w": 736.0,
-      "fixed_scale": 0.85,
-      "scale_lo": 0.7,
-      "scale_hi": 1.05,
-      "scale_deadzone_lo": 0.97,
-      "scale_deadzone_hi": 1.03
-    },
-    "v14": {
-      "v14_enable": true,
-      "physics": true,
-      "focal": true,
-      "ensemble": true,
-      "calibrate": false,
-      "auto_config": true,
-      "health": true,
-      "diag": true
-    }
+  "infer": {
+   "include": [
+    [
+     "2026-06-05",
+     "2026-06-29"
+    ],
+    [
+     "2026-07-01",
+     "2026-12-31"
+    ]
+   ],
+   "exclude": [
+    [
+     "2026-06-10",
+     "2026-06-12"
+    ],
+    [
+     "2026-06-15",
+     "2026-06-16"
+    ],
+    [
+     "2026-06-29",
+     "2026-06-29"
+    ]
+   ]
   },
-  "800080270778_4200903422131": {
-    "_note_": "[v13] 变频小功率空调用户, 显式关闭守卫. 保留8bc0490业务配置; train/infer 按时序OOD统一为7月前训练、7月及以后推理(已移除原train中的7/1-7/8段).",
-    "target_col": "p2",
-    "on_thr_w": 50.0,
-    "guard_enabled": false,
-    "splits": {
-      "train": {
-        "include": [
-          [
-            "2026-06-24",
-            "2026-06-25"
-          ]
-        ]
-      }
-    },
-    "train": {
-      "include": [
-        [
-          "2026-05-21",
-          "2026-06-08"
-        ]
-      ]
-    },
-    "infer": {
-      "include": [
-        [
-          "2026-07-01",
-          "2026-12-31"
-        ]
-      ]
-    },
-    "v14": {
-      "v14_enable": true,
-      "physics": true,
-      "focal": true,
-      "ensemble": true,
-      "calibrate": false,
-      "auto_config": true,
-      "health": true,
-      "diag": true
-    }
+  "v14": {
+   "v14_enable": true,
+   "physics": true,
+   "focal": true,
+   "ensemble": true,
+   "calibrate": false,
+   "auto_config": true,
+   "health": true,
+   "diag": true
   },
-  "800080270789_4206680982373": {
-    "_note_": "[v13] 变频小功率空调用户(target=p1+p2复合列, on_thr=60W), 显式关闭守卫. 保留原始配置.",
-    "target_col": "p1+p2",
-    "on_thr_w": 60.0,
-    "guard_enabled": false,
-    "splits": {
-      "train": {
-        "include": []
-      },
-      "val": {
-        "include": []
-      },
-      "test": {
-        "include": []
-      }
-    },
-    "train": {
-      "include": [
-        [
-          "2026-05-21",
-          "2026-06-04"
-        ]
-      ]
-    },
-    "infer": {
-      "include": [
-        [
-          "2026-07-01",
-          "2026-12-31"
-        ]
-      ]
-    },
-    "v14": {
-      "v14_enable": true,
-      "physics": true,
-      "focal": true,
-      "ensemble": true,
-      "calibrate": false,
-      "auto_config": true,
-      "health": true,
-      "diag": true
-    }
-  },
-  "800080270800_4200904302272": {
-    "_note_": "[v13] 变频小功率空调用户(on_thr=50W), 显式关闭守卫. 保留原始配置.",
-    "target_col": "p1",
-    "on_thr_w": 50.0,
-    "guard_enabled": false,
-    "splits": {
-      "train": {
-        "include": []
-      },
-      "val": {
-        "include": []
-      },
-      "test": {
-        "include": []
-      }
-    },
-    "train": {
-      "include": [
-        [
-          "2026-05-27",
-          "2026-06-01"
-        ]
-      ]
-    },
-    "infer": {
-      "include": [
-        [
-          "2026-07-01",
-          "2026-12-31"
-        ]
-      ]
-    },
-    "v14": {
-      "v14_enable": true,
-      "physics": true,
-      "focal": true,
-      "ensemble": true,
-      "calibrate": false,
-      "auto_config": true,
-      "health": true,
-      "diag": true
-    }
-  },
-  "_default": {
-    "train": {
-      "exclude": [
-        [
-          "2026-07-01",
-          "2026-12-31"
-        ]
-      ]
-    },
-    "infer": {
-      "include": [
-        [
-          "2026-07-01",
-          "2026-12-31"
-        ]
-      ]
-    }
+  "splits": {
+   "train": {
+    "include": [
+     [
+      "2026-06-04",
+      "2026-06-04"
+     ],
+     [
+      "2026-06-10",
+      "2026-06-12"
+     ],
+     [
+      "2026-06-15",
+      "2026-06-16"
+     ],
+     [
+      "2026-06-29",
+      "2026-06-29"
+     ]
+    ]
+   },
+   "val": {
+    "include": []
+   },
+   "test": {
+    "include": []
+   }
   }
+ },
+ "800080252844_4206894986488": {
+  "_note_": "[v14.3 整改] 变频空调用户; bus_guard 维持不变. P1-1: 温桶标定 direction=both (cap=训练同温桶p90, 剪训练期从未出现的功率段; 中心趋势仍交给 bus_guard).",
+  "guard_enabled": false,
+  "target_col": "p2",
+  "splits": {
+   "train": {
+    "include": []
+   },
+   "val": {
+    "include": []
+   },
+   "test": {
+    "include": []
+   }
+  },
+  "train": {
+   "include": [
+    [
+     "2025-07-10",
+     "2026-06-04"
+    ]
+   ]
+  },
+  "infer": {
+   "include": [
+    [
+     "2026-07-01",
+     "2026-12-31"
+    ]
+   ]
+  },
+  "bus_guard": {
+   "enabled": true,
+   "version": "v14.1.1_d87_day_power",
+   "d87_col": "load_iden_data87",
+   "day_absmax_th": 110.0,
+   "startup_thr": 0.4,
+   "use_original_state_if_higher": true,
+   "post_min_on": 1,
+   "post_fill_short_off": 3,
+   "power_calib_enable": true,
+   "train_on_mean_w": 736.0,
+   "fixed_scale": 0.85,
+   "scale_lo": 0.7,
+   "scale_hi": 1.05,
+   "scale_deadzone_lo": 0.97,
+   "scale_deadzone_hi": 1.03
+  },
+  "v14": {
+   "v14_enable": true,
+   "physics": true,
+   "focal": true,
+   "ensemble": true,
+   "calibrate": false,
+   "auto_config": true,
+   "health": true,
+   "diag": true
+  },
+  "power_temp_calib": {
+   "enable": true,
+   "gamma": 0.85,
+   "direction": "both",
+   "cap_stat": "p90"
+  }
+ },
+ "800080270778_4200903422131": {
+  "_note_": "[v14.3 整改] 变频小功率(on_thr=50W). P0-1 温桶标定 lift-only (SAE 38.3%->18.0%); 解耦统计窗 [5/21,6/30] 扩大温桶覆盖 (原窗[5/21,6/8]温桶与7月高温重叠不足).",
+  "target_col": "p2",
+  "on_thr_w": 50.0,
+  "guard_enabled": false,
+  "splits": {
+   "train": {
+    "include": [
+     [
+      "2026-06-24",
+      "2026-06-25"
+     ]
+    ]
+   }
+  },
+  "train": {
+   "include": [
+    [
+     "2026-05-21",
+     "2026-06-08"
+    ]
+   ]
+  },
+  "infer": {
+   "include": [
+    [
+     "2026-07-01",
+     "2026-12-31"
+    ]
+   ]
+  },
+  "v14": {
+   "v14_enable": true,
+   "physics": true,
+   "focal": true,
+   "ensemble": true,
+   "calibrate": false,
+   "auto_config": true,
+   "health": true,
+   "diag": true
+  },
+  "power_temp_calib": {
+   "enable": true,
+   "gamma": 0.85
+  },
+  "calib_stats_include": [
+   [
+    "2026-05-21",
+    "2026-06-30"
+   ]
+  ]
+ },
+ "800080270789_4206680982373": {
+  "_note_": "[v14.3 整改] 变频小功率(p1+p2复合,on_thr=60W). P0-1 温桶标定 lift-only (SAE 20.8%->16.4%); 解耦统计窗 [5/21,6/30]; P2 时段先验经证据否决不适合(FP 41/42 不在低先验小时).",
+  "target_col": "p1+p2",
+  "on_thr_w": 60.0,
+  "guard_enabled": false,
+  "splits": {
+   "train": {
+    "include": []
+   },
+   "val": {
+    "include": []
+   },
+   "test": {
+    "include": []
+   }
+  },
+  "train": {
+   "include": [
+    [
+     "2026-05-21",
+     "2026-06-04"
+    ]
+   ]
+  },
+  "infer": {
+   "include": [
+    [
+     "2026-07-01",
+     "2026-12-31"
+    ]
+   ]
+  },
+  "v14": {
+   "v14_enable": true,
+   "physics": true,
+   "focal": true,
+   "ensemble": true,
+   "calibrate": false,
+   "auto_config": true,
+   "health": true,
+   "diag": true
+  },
+  "power_temp_calib": {
+   "enable": true,
+   "gamma": 0.85
+  },
+  "calib_stats_include": [
+   [
+    "2026-05-21",
+    "2026-06-30"
+   ]
+  ]
+ },
+ "800080270800_4200904302272": {
+  "_note_": "[v14.3 整改] 变频小功率(on_thr=50W). P0-1: 温桶标定 lift-only; P0-3 扩窗实验 F1 0.9566->0.9269 判定有害已回退; 替代方案 v14.4 解耦统计窗: 分类器维持 [5/27,6/1] 原窗, LUT/先验用 [5/21,6/30] 全量训练侧日期重建 (全 <7/1 无泄漏).",
+  "target_col": "p1",
+  "on_thr_w": 50.0,
+  "guard_enabled": false,
+  "splits": {
+   "train": {
+    "include": []
+   },
+   "val": {
+    "include": []
+   },
+   "test": {
+    "include": []
+   }
+  },
+  "train": {
+   "include": [
+    [
+     "2026-05-27",
+     "2026-06-01"
+    ]
+   ]
+  },
+  "infer": {
+   "include": [
+    [
+     "2026-07-01",
+     "2026-12-31"
+    ]
+   ]
+  },
+  "v14": {
+   "v14_enable": true,
+   "physics": true,
+   "focal": true,
+   "ensemble": true,
+   "calibrate": false,
+   "auto_config": true,
+   "health": true,
+   "diag": true
+  },
+  "power_temp_calib": {
+   "enable": true,
+   "gamma": 0.85
+  },
+  "calib_stats_include": [
+   [
+    "2026-05-21",
+    "2026-06-30"
+   ]
+  ]
+ },
+ "_default": {
+  "train": {
+   "exclude": [
+    [
+     "2026-07-01",
+     "2026-12-31"
+    ]
+   ]
+  },
+  "infer": {
+   "include": [
+    [
+     "2026-07-01",
+     "2026-12-31"
+    ]
+   ]
+  }
+ }
 }

@@ -58,7 +58,7 @@ from common import (INFER_BUS_CSV, INFER_BR_CSV,    # v6.12.6+v6.15.0 推理路�
                     setup_chinese_font, get_logger, Timer)
 from feature_utils import (load_bus_csv, load_branch_csv,
                            resample_and_align, build_features,
-                           assert_no_nan_features)
+                           assert_no_nan_features, align_features_to_bundle)
 from postprocess import apply_postprocess
 from weather_utils import get_weather_for_period
 from expert_utils import assign_season
@@ -238,6 +238,10 @@ def main():
         X_df = build_features(df, top_cols, weather_df=weather_df,
                               temp_power_lut=temp_power_lut)
         log.info(f"  特征 shape={X_df.shape}")
+
+        # [v14.3] 训练/推理特征对齐: 以 bundle["feat_names"] 为唯一口径
+        #   (支持训练端特征黑名单 NILM_EXCLUDE_FEATURES, 详见 feature_utils.align_features_to_bundle)
+        X_df = align_features_to_bundle(X_df, bundle, logger=log, ctx="05_inference")
         
         # v6 L2: 漂移检测告警
         if temp_power_lut and weather_df is not None:
@@ -755,6 +759,8 @@ def main():
                         gamma=float(_cfg_ptc.get("gamma", 0.85)),
                         stat=str(_cfg_ptc.get("stat", "p50")),
                         min_gain=float(_cfg_ptc.get("min_gain", 1.05)),
+                        direction=str(_cfg_ptc.get("direction", "lift")),
+                        cap_stat=str(_cfg_ptc.get("cap_stat", "p90")),
                         logger=log)
                 elif not _lut:
                     log.info("  [v14.2 power_temp_calib] bundle 无 LUT (训练时无气象), 跳过")

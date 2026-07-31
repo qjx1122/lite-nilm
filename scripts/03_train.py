@@ -52,7 +52,8 @@ from common import (ARTIFACT_DIR, MODEL_DIR, PRED_DIR, METRIC_DIR,
 class _SkipD87Guard(Exception):
     """[v11] 内部信号: D87_ADAPTIVE_GUARD_ENABLED=False 时用它优雅跳过 d87 元数据 try 块"""
     pass
-from feature_utils import build_features, assert_no_nan_features
+from feature_utils import (build_features, assert_no_nan_features,
+                           parse_exclude_features_env)
 from postprocess import search_best_threshold, apply_postprocess
 from sample_weight_utils import (compute_inverse_density_weights,
                                  summarize_weights)
@@ -285,6 +286,20 @@ def main():
         
         X_df = build_features(df, top_cols, weather_df=weather_df,
                               temp_power_lut=temp_power_lut)
+        # [v14.3] 特征黑名单 (逐用户): 训练侧证据驱动的反"记忆捷径"开关.
+        #   物理依据: 单变量日历特征 (如 dow) 在小样本冷却季可当"捷径"死记
+        #   "周一=OFF" (U842 训练窗冷却季近 4 个周一全 OFF, 仅 ~6 个样本),
+        #   无物理因果, 推理期泛化到 ON 的周一则整日崩塌.
+        #   env NILM_EXCLUDE_FEATURES="dow,is_weekend" (逗号分隔) 生效.
+        #   训推一致性: bundle["feat_names"] 自动剔除 -> 推理 reindex 同口径.
+        _excl = parse_exclude_features_env(_os.environ.get("NILM_EXCLUDE_FEATURES", ""))
+        if _excl:
+            _hit = [c for c in _excl if c in X_df.columns]
+            _miss = [c for c in _excl if c not in X_df.columns]
+            if _hit:
+                X_df = X_df.drop(columns=_hit)
+            log.info(f"  [v14.3] NILM_EXCLUDE_FEATURES 生效: 剔除 {_hit}"
+                     + (f" | 未命中(忽略): {_miss}" if _miss else ""))
         feat_names = X_df.columns.tolist()
         log.info(f"  最终特征维度: {len(feat_names)}")
         log.info(f"    - 原始电参量: 25")
@@ -1028,11 +1043,56 @@ def main():
     try:
         from power_temp_calib import (build_branch_temp_power_lut,
                                       build_hourly_on_prior)
-        _s_true_all = (df["y_ac"].values.astype(float) >= ON_THR_W).astype(int)
-        hourly_on_prior = build_hourly_on_prior(df.index, _s_true_all)
-        if USE_WEATHER_FEATURES and weather_df is not None:
+        # [v14.4] 解耦统计窗: env NILM_CALIB_STATS_SPEC (JSON {"include": [[a,b],...]})
+        #   物理依据: 温桶 LUT / 时段先验只是训练侧分布统计量, 允许比分类器
+        #   训练窗更宽 (仍严格 <评估起点, 零泄漏). 用途: 训练窗极短的用户
+        #   (如 U0800 仅 6 天) LUT 温桶覆盖数 == 4, 推理期 43% ON 点无桶可抬;
+        #   解耦后用全量 <评估起点 训练侧日期重建 -> 覆盖显著扩大.
+        #   纪律: 窗口仍是配置显式声明的 include 区间, 日志审计实际覆盖日期.
+        _calib_spec_str = _os.environ.get("NILM_CALIB_STATS_SPEC", "").strip()
+        _stats_ts, _stats_y, _stats_wdf = None, None, None
+        if _calib_spec_str:
+            try:
+                import json as _json_calib
+                _cspec = _json_calib.loads(_calib_spec_str)
+                _ranges = _cspec.get("include", [])
+                from feature_utils import (load_bus_csv as _lbc,
+                                           load_branch_csv as _lbr,
+                                           resample_and_align as _rsa)
+                _bus_c, _ = _lbc(BUS_CSV)
+                _br_c = _lbr(BR_CSV, target_col=TARGET_COL
+                             if isinstance(TARGET_COL, str) and "+" in TARGET_COL else None)
+                _dfc = _rsa(_bus_c, _br_c, keep_cols=top_cols)
+                if _ranges:
+                    _m = pd.Series(False, index=_dfc.index)
+                    for _a, _b2 in _ranges:
+                        _m |= ((_dfc.index >= pd.Timestamp(_a)) &
+                               (_dfc.index < pd.Timestamp(_b2) + pd.Timedelta(days=1)))
+                    _dfc = _dfc[_m]
+                if len(_dfc) > 0:
+                    _stats_ts, _stats_y = _dfc.index, _dfc["y_ac"].values.astype(float)
+                    if USE_WEATHER_FEATURES:
+                        _stats_wdf = get_weather_for_period(
+                            latitude=WEATHER_LATITUDE, longitude=WEATHER_LONGITUDE,
+                            start_ts=_dfc.index.min(), end_ts=_dfc.index.max(),
+                            cache_dir=WEATHER_CACHE_DIR, logger=log)
+                    log.info(f"  [v14.4] 解耦统计窗生效: {len(_dfc)} 条 "
+                             f"({_dfc.index.min().date()} ~ {_dfc.index.max().date()}), "
+                             f"覆盖 {len(pd.unique(_dfc.index.normalize()))} 天")
+                else:
+                    log.warning(f"  [v14.4] 解耦统计窗过滤后为空, 回退训练窗统计")
+            except Exception as _e_cs:
+                log.warning(f"  [v14.4] 解耦统计窗构建失败 ({_e_cs}), 回退训练窗统计")
+                _stats_ts, _stats_y, _stats_wdf = None, None, None
+        if _stats_ts is None:
+            _stats_ts = df.index
+            _stats_y = df["y_ac"].values.astype(float)
+            _stats_wdf = weather_df
+        _s_true_all = (_stats_y >= ON_THR_W).astype(int)
+        hourly_on_prior = build_hourly_on_prior(_stats_ts, _s_true_all)
+        if USE_WEATHER_FEATURES and _stats_wdf is not None:
             branch_temp_power_lut = build_branch_temp_power_lut(
-                df.index, df["y_ac"].values.astype(float), weather_df,
+                _stats_ts, _stats_y, _stats_wdf,
                 on_thr=ON_THR_W)
             log.info(f"  [v14.2] 功率温桶 LUT: "
                      f"{len(branch_temp_power_lut.get('bins', {}))} 桶 -> bundle")

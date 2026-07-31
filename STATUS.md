@@ -5,7 +5,8 @@
 
 ## 当前目标
 - 已完成（2026-07-31 session 2）：**5 用户 v14 批量重跑 + 与上版对比 + 逐用户逐日问题详析** → 交付 `V14_RERUN_ANALYSIS.md`
-- 下一会话：待指派（候选：按报告 §6 P0 项实施——U842 梅雨先验修复 / 功率温度条件标定 / U0800 扩窗）
+- 已完成（2026-07-31/08-01 session 3）：**P0–P2 整改路线图执行 + 全量重验** → 交付 `V14_REMEDIATION_REPORT.md`
+- 下一会话：待指派（候选：8 月数据回流入训后复测 U0800/U0778 尾部未愈项；U0789 分路建模专题）
 
 ## 已完成
 - [x] v14 收尾（session 1）：93 组 v14 单测全过 + symmetry 测试可移植性修复 + 烟测/工具链实测
@@ -16,30 +17,47 @@
 - [x] **U842 7/6 整日崩塌根因实锤（P8 天气先验失配）**：p_on=0.05 / 全维扫描 Top 偏差全为天气族（diurnal 1.87σ/humidity 1.24σ）/ 梅雨组 p_on 0.684 vs 晴热组 0.990 / 6·21(26.2°C RH86)同签名复现
 - [x] 逐用户逐日问题表（75+ 天全部标注 P1–P8）+ 整改路线图 → `V14_RERUN_ANALYSIS.md`
 
+## 已完成（session 3 整改）
+- [x] v14.2 整改模块落地（功率温桶标定 lift-only / 时段先验抑制 / 日报 4 新列）+ 47 组单测
+- [x] **P0-1 温桶标定启用 3 用户**：U0778 SAE 38.3%→19.0%（达标）、U0789 20.8%→16.7%（达标）、U0800 36.5%→35.4%（部分愈，7 月高温无桶+档位上行 80% 未达标）
+- [x] **P0-3 U0800 扩窗证伪回退**（F1 0.9566→0.9269），替代方案 **v14.4 解耦统计窗**（分类器原窗 + LUT/先验用 [5/21,6/30] 全量训练侧日期重建，3 用户统一政策）
+- [x] **P0-2 U842 梅雨修复三实验全部证伪**：E1 去天气（F1 0.7199）/ E2 代表日回流（0.8882,FN 增倍）/ E3 去 dow（0.6418），7/6 均依然全灭；线性探针同败+bus/标签排除 → 联合分布外，标记未愈需业务补样本
+- [x] **P1-1 U2844 对称标定 cap=p90 落地实测空转**（上抬 0 下压 0），残余 +5.7% 为整体平移非温桶问题，bus_guard 已担
+- [x] **P1-2 U2844 fill_short_off {3,5} 网格**（val 5/28-6/4 段内推理，零泄漏）两档逐点一致 → 保守保留 3
+- [x] **P2-1 time_prior 证据否决**：U0789 双低可压 1/42、U842 0/20，FP 集中在开关机过渡段非低先验时段
+- [x] v14.3 新机制：exclude_features 黑名单 + align_features_to_bundle 对齐哨兵（04/05/06 三处）+ 对称标定 + 一致性测试动态发现（21+11 组新单测）
+- [x] **终验 5 用户全量重跑 546.5s 全 ok**：F1/P/R/TP/FP/FN 与基线逐位一致（零回归实证）
+- [x] 交付 `V14_REMEDIATION_REPORT.md`（逐项「做了什么/参数出处/验证数字/未愈声明」）
+
 ## 进行中
 - （无）
 
 ## 下一步（TODO，按优先级）
-1. **P0 U842 梅雨先验修复**：天气特征去独断（限分裂收益/剔除 1-2 个）+ 6/19、6/21 类代表日回流训练（<7/1）→ 重跑验证 7/6
-2. **P0 功率温度条件标定**（residual×温桶）：U0778（62%）、U0800（62%）、U0789（78%）电量不可用
-3. **P0 U0800 训练窗 6 天→6 月底**（数据 5/21 起有 40 天）
-4. **P1 U2844 标定方向修正**（该用户 7 月为高估 +6%，现 fixed_scale=0.85 按低估设计）+ 中档偏弱 ON 增强（7/5 类）
-5. **P1 U0789 分路/双开建模**；日报指标改版（ON/OFF 拆分、false_on_kWh）
-6. （长期）V14 报告 §九 P1-P3 roadmap
+1. **8 月数据回流**后复测：U0800 尾部高温段（SAE 45%）、U0778 7/14-7/15 LUT 热端外、U0789 7/15 双开大功率
+2. **U842 7/6 梅雨联合分布外**：业务侧补采梅雨极端日 ON 样本回流入训（数据题非模型题）
+3. **U0789 分路/双开状态建模**（p1+p2 复合拆解，独立专题）
+4. **U2844 7/5 中档偏弱 ON**：8 月数据或专用增强
+5. （长期）V14 报告 §九 P1-P3 roadmap
 
 ## 决策记录 / 踩坑
 - **⚠️ venv 不跨 session 持久**：bash 快照剔除 `.venv`，每个新 session 开头必须 `python3 -m venv .venv && pip install -r requirements.txt`（~25s）；需 lightgbm 时另装（~3s）
 - **⚠️ 本地 git 历史可能被重置到 base commit（dd5e87c）而工作区文件保留**：远端分支才是真相——开局先 `git fetch origin arena/019fb816-lite-nilm:refs/remotes/origin/arena/019fb816-lite-nilm` 对比 HEAD，若本地落后/分叉则 rebase 到远端再干活（session 2 已踩并修复：本地 commit 曾错挂 dd5e87c 上，rebase 到 86ce7ad 解决）
-- bundle.pkl 反序列化需 `sys.path.insert(0,"scripts")`（EnsembleClf 在 v14_enhancements 模块内）；本仓库 bundle 键为 `feat_cols/feat_names/clf/scaler/best_thr/...`
+- bundle.pkl 反序列化需 `sys.path.insert(0,"scripts")`（EnsembleClf 在 v14_enhancements 模块内）；本仓库 bundle 键为 `feat_cols/feat_names/clf/scaler/best_thr/branch_temp_power_lut/hourly_on_prior/...`
+- **venv 补装注意**：requirements.txt 不含 pyyaml/requests，批跑前需 `pip install pyyaml requests`（session 3 踩坑修复）
+- **批跑 --users 是空格分隔**（nargs="*"），逗号会被当成单个用户 ID 导致"发现 0 用户"
+- **分路/总线 CSV 名易混**：总线 = `e241_...-Ch1-...csv`（event_time + load_iden_data*），分路 = `<meter_id>-...csv`（time + p1..p4）；对齐后分路列重命名 `y_ac`
+- **resample_and_align keep_cols=None 可能出 0 行**（全 load_iden 列含全 NaN 列时），训推一致必须用 bundle feat_cols
 - artifacts/models/logs 被 .gitignore 排除不入库（快照内仍保留在本地工作区），报告引用其相对路径与仓库惯例一致
 - U842 与上版对比必须**按 ≥2026-07-01 重切**（本次推理 n=2780=6月验证段1340+7月1440，上版表 3.1 仅 7 月；真值 kWh 138.6 两侧一致口径自洽）
 - U842 7/6 排查路径：排除数据事故（原始 d73/分路/气象缓存正常）→ p_on 崩塌在分类层 → 168 维全维扫描定位天气族 → 湿度 Middling 陷阱（ON 窗湿度 93 vs 日均 88；日均口径否决"湿度独因"假设，转向温差/cooling_degree 联合签名）→ 6/21 同签名复现确认 P8
 - 5σ 异常/focal gamma 测试设计踩坑记录见 git log（session 1 commit）
 
 ## 关键文件路径
-- `STATUS.md` — 本文件 | `V14_RERUN_ANALYSIS.md` — **本次主交付**（对比+逐日详析）
-- `V14_BATCH_COMPARISON.md` / `V14_DAILY_METRICS_ANALYSIS.md` — 上版对比基线
-- `data/time_filters.json` — 5 用户配置（U2844 含 bus_guard v14.1.1；U842 为 P0 v3 窗口+6月验证段）
+- `STATUS.md` — 本文件 | `V14_REMEDIATION_REPORT.md` — **最新主交付**（P0-P2 整改验证）
+- `V14_RERUN_ANALYSIS.md` — v14 基线对比+逐日详析+路线图 | `V14_BATCH_COMPARISON.md` / `V14_DAILY_METRICS_ANALYSIS.md` — 上版对比基线
+- `data/time_filters.json` — 5 用户最终配置（U2844 bus_guard+direction=both；3 用户 power_temp_calib+calib_stats_include）
+- `scripts/power_temp_calib.py` — 温桶标定/时段先验（含 direction=both cap=p90 对称模式）
+- `results_v6_15_0/` — 一致性测试符号链接农场（已 .gitignore，供 test_train_infer_symmetry 实跑）
 - `artifacts/infers/<user>/inference_daily_metrics.csv` / `inference_result.csv` — 逐日/逐点
 - `logs/_batch/batch_run_20260731_151530.log` — 批跑日志（bus_guard 统计在此）
 - `models/<user>/nilm_ac_two_stage.pkl` — v14 bundle（clf=EnsembleClf）

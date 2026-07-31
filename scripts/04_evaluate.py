@@ -21,7 +21,8 @@ from common import (ARTIFACT_DIR, MODEL_PKL, PRED_DIR, METRIC_DIR, PROJECT_VERSI
                     WEATHER_LATITUDE, WEATHER_LONGITUDE, WEATHER_CACHE_DIR,
                     SUMMER_TEMP_THRESHOLD, WINTER_TEMP_THRESHOLD,
                     get_logger, Timer)
-from feature_utils import build_features, assert_no_nan_features
+from feature_utils import (build_features, assert_no_nan_features,
+                           align_features_to_bundle)
 from metrics_utils import (build_daily_metrics_rows, save_daily_metrics_csv,
                            compute_raw_daily_counts)  # v13.16
 from postprocess import apply_postprocess
@@ -126,6 +127,8 @@ def main():
                  f"({len([k for k in temp_power_lut if isinstance(k, tuple)])} 个桶)")
     X_df = build_features(df, top_cols, weather_df=weather_df,
                           temp_power_lut=temp_power_lut)
+    # [v14.3] 训练/评估特征对齐 (特征黑名单场景: 评估侧会多出被剔列如 dow)
+    X_df = align_features_to_bundle(X_df, bundle, logger=log, ctx="04_evaluate")
 
     # 季节标签
     if use_temp_based_season and weather_df is not None:

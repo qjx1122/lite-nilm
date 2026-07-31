@@ -373,6 +373,53 @@ def build_features(df: pd.DataFrame, top_cols: list,
     return X
 
 
+def parse_exclude_features_env(val: str) -> list:
+    """[v14.3] 解析 NILM_EXCLUDE_FEATURES 环境变量为特征名单列表.
+
+    契约:
+      - 逗号分隔, 逐项 strip, 空项丢弃; 允许中文逗号(防手写配置笔误)
+      - 空串/None/全空白 -> []
+      - 例: "dow, is_weekend ," -> ["dow", "is_weekend"]
+    """
+    if not val:
+        return []
+    return [c.strip() for c in str(val).replace("\uFF0C", ",").split(",") if c.strip()]
+
+
+def align_features_to_bundle(X_df, bundle: dict, logger=None, ctx: str = ""):
+    """[v14.3] 训练/推理特征对齐: 以 bundle["feat_names"] 为唯一口径.
+
+    背景: v14.3 支持训练端特征黑名单 (NILM_EXCLUDE_FEATURES, 如 dow 反日历记忆捷径).
+    推理/评估侧 build_features 仍会生成被剔列, 若直接喂 scaler/clf 会维度错位报错
+    (如 "X has 168 features, but StandardScaler is expecting 167").
+    多余列安全丢弃 (黑名单/版本差异); 缺失列填 0 并 WARN (理论上不应发生).
+
+    参数:
+        X_df:   build_features 输出 (DataFrame)
+        bundle: 模型 bundle (dict); 无 "feat_names" 键时原样返回 (旧 bundle 兼容)
+        logger: 可选日志器
+        ctx:    日志上下文标签 (如 "04_evaluate")
+
+    返回:
+        列序/列集与 bundle["feat_names"] 严格一致的 DataFrame
+    """
+    feat_names = bundle.get("feat_names") if isinstance(bundle, dict) else None
+    if not feat_names:
+        return X_df
+    if list(X_df.columns) == feat_names:
+        return X_df
+    _log_i = (logger.info if logger is not None else print)
+    _log_w = (logger.warning if logger is not None else print)
+    extra   = [c for c in X_df.columns if c not in feat_names]
+    missing = [c for c in feat_names if c not in X_df.columns]
+    if extra:
+        _log_i(f"  [v14.3 特征对齐/{ctx}] 多出列按 bundle 口径剔除: {extra[:6]}"
+               + (f"...共{len(extra)}列" if len(extra) > 6 else ""))
+    if missing:
+        _log_w(f"  [v14.3 特征对齐/{ctx}] 缺失 {len(missing)} 个训练特征列, 填 0: {missing[:6]}")
+    return X_df.reindex(columns=feat_names).fillna(0.0)
+
+
 def assert_no_nan_features(X_df, stage_name: str = "unknown", logger=None,
                            raise_on_nan: bool = True) -> dict:
     """[v13.7] 特征矩阵 NaN 硬检测 - 03/04/05 三阶段共用
