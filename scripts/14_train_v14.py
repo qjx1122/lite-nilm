@@ -41,7 +41,8 @@ def apply_v14_monkey_patches(args):
 
     # 拦截点 1: Stage-1 分类器替换为 EnsembleClf
     if args.v14_ensemble:
-        _orig_gbc = _ens.GradientBoostingClassifier
+        _orig_gbc = getattr(_ens, "_ORIG_V14_GBC", None) or _ens.GradientBoostingClassifier
+        _ens._ORIG_V14_GBC = _orig_gbc
 
         class _V14ClfFactory:
             """延迟包装器: 在 __init__ 时按 n_train 动态选参"""
@@ -119,9 +120,13 @@ def main():
         sys.argv = argv_original
         # 恢复 sklearn 原类 (防止污染其他测试)
         import sklearn.ensemble as _ens
-        from sklearn.ensemble import (GradientBoostingClassifier,
-                                      GradientBoostingRegressor)
-        _ens.GradientBoostingClassifier = GradientBoostingClassifier
+        _orig_gbc = getattr(_ens, "_ORIG_V14_GBC", None)
+        if _orig_gbc is not None:
+            _ens.GradientBoostingClassifier = _orig_gbc
+        else:
+            from sklearn.ensemble import GradientBoostingClassifier as _orig_gbc
+            _ens.GradientBoostingClassifier = _orig_gbc
+        from sklearn.ensemble import GradientBoostingRegressor
         _ens.GradientBoostingRegressor = GradientBoostingRegressor
 
     print("[v14] 训练完成")

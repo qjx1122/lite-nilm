@@ -115,8 +115,9 @@ class EnsembleClf:
                  lgb_weight: float = 0.4,
                  use_lgb: bool = True,
                  **kwargs):
-        from sklearn.ensemble import GradientBoostingClassifier
-        self.gbdt = GradientBoostingClassifier(
+        import sklearn.ensemble as _ens
+        _GBC = getattr(_ens, "_ORIG_V14_GBC", None) or _ens.GradientBoostingClassifier
+        self.gbdt = _GBC(
             n_estimators=n_estimators, max_depth=max_depth,
             learning_rate=lr, subsample=subsample,
             random_state=random_state, **kwargs,

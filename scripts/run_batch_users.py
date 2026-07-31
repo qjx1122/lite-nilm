@@ -441,7 +441,8 @@ def run_single_user(info, output_dir, skip_existing=False, log_file=None,
                     train_time_filter_spec="", infer_time_filter_spec="",
                     guard_enabled="",
                     splits_time_filter_spec="",
-                    common_overrides_spec=""):
+                    common_overrides_spec="",
+                    v14_flags_spec=""):
     """对单个用户调用 run_user_pipeline.py
 
     [v6.12.6+v6.15.0-graceful-v7] 三态返回:
@@ -492,6 +493,9 @@ def run_single_user(info, output_dir, skip_existing=False, log_file=None,
     # [v13.5] 透传 8 项 common 常量覆盖
     if common_overrides_spec:
         cmd += ["--common-overrides", common_overrides_spec]
+    # [v14] 透传 v14 增强配置
+    if v14_flags_spec:
+        cmd += ["--v14-flags", v14_flags_spec]
 
     # v6.12.6+v6.15.0-graceful-v3: 强制子进程 stdout/stderr 使用 UTF-8 输出,
     # 与本批处理脚本 + 子进程 reconfigure 形成"端到端 UTF-8 一致" (Windows GBK 兼容)
@@ -774,6 +778,8 @@ def main():
     ap.add_argument("--resume-skip-failed", action="store_true",
                     help="[v13.17] 配合 --resume 使用: 连上次 fail 的用户也跳过 (需手工删行才重试). "
                          "默认 False = fail 用户续跑时会重跑")
+    ap.add_argument("--v14-flags", default="",
+                    help="[v14] JSON 字符串, 透传给 run_user_pipeline.py 的 v14 开关")
     args = ap.parse_args()
 
     # [v12] 加载时段过滤配置
@@ -885,12 +891,14 @@ def main():
         _guard_enabled = ""   # [v13] 空 = 未指定
         _splits_spec_str = ""   # [v13] per-split 过滤
         _common_overrides_str = ""   # [v13.5] 8 项 common 常量覆盖
+        _v14_flags_str = getattr(args, "v14_flags", "")   # [v14] v14 增强开关
         if time_filter_config:
             from time_filter_utils import (get_user_stage_spec, spec_to_cli_arg,
                                             spec_summary, get_user_guard_enabled,
                                             load_splits_time_filter, splits_spec_to_cli_arg,
                                             splits_spec_summary,
-                                            get_user_common_overrides)
+                                            get_user_common_overrides,
+                                            get_user_v14_flags)
             _train_spec = get_user_stage_spec(time_filter_config, u["folder_name"], "train")
             _infer_spec = get_user_stage_spec(time_filter_config, u["folder_name"], "infer")
             _train_spec_str = spec_to_cli_arg(_train_spec)
@@ -922,6 +930,12 @@ def main():
                 _common_overrides_str = _json_batch.dumps(_common_overrides, ensure_ascii=False)
                 print(f"  [v13.5] common 覆盖 {len(_common_overrides)} 项: "
                       f"{', '.join(f'{k}={v}' for k, v in _common_overrides.items())}")
+            if not _v14_flags_str:
+                _v14_dict = get_user_v14_flags(time_filter_config, u["folder_name"])
+                if any(_v14_dict.values()):
+                    import json as _json_batch
+                    _v14_flags_str = _json_batch.dumps(_v14_dict, ensure_ascii=False)
+                    print(f"  [v14] v14 增强配置: enabled={_v14_dict.get('v14_enable', False)}")
 
         t0 = datetime.now()
         status, msg = run_single_user(u, output_dir, args.skip_existing, log_path,
@@ -930,7 +944,8 @@ def main():
                                        infer_time_filter_spec=_infer_spec_str,
                                        guard_enabled=_guard_enabled,
                                        splits_time_filter_spec=_splits_spec_str,
-                                       common_overrides_spec=_common_overrides_str)
+                                       common_overrides_spec=_common_overrides_str,
+                                       v14_flags_spec=_v14_flags_str)
         t1 = datetime.now()
         dt = (t1 - t0).total_seconds()
         icon  = STATUS_ICON.get(status, "?")
