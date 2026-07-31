@@ -22,7 +22,7 @@
   },
 
   "800080252844_4206894986488": {
-    "_note_": "[v13] 变频空调用户。原配置key规范化为不带后缀的folder_name; d87尖峰弱, 显式关闭守卫.",
+    "_note_": "[v13+v14.1] 变频空调用户; d87尖峰弱关闭d87守卫; 启用总线一致性守卫+功率标定解决7月OFF日误报与ON日漏检/低估.",
     "guard_enabled": false,
     "target_col": "p2",
     "splits": {
@@ -32,6 +32,23 @@
     },
     "train": {"include": [["2025-07-10", "2026-06-04"]]},
     "infer": {"include": [["2026-07-01", "2026-12-31"]]},
+    "bus_guard": {
+      "enabled": true,
+      "version": "v14.1.1_d87_day_power",
+      "d87_col": "load_iden_data87",
+      "day_absmax_th": 110.0,
+      "startup_thr": 0.40,
+      "use_original_state_if_higher": true,
+      "post_min_on": 1,
+      "post_fill_short_off": 3,
+      "power_calib_enable": true,
+      "train_on_mean_w": 736.0,
+      "fixed_scale": 0.85,
+      "scale_lo": 0.70,
+      "scale_hi": 1.05,
+      "scale_deadzone_lo": 0.97,
+      "scale_deadzone_hi": 1.03
+    },
     "v14": {
       "v14_enable": true,
       "physics": true,

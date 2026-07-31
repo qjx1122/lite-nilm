@@ -502,6 +502,85 @@ def main():
             log.warning(f"  [d87 守卫] 跳过 (缺列 {D87_COL} 或 event_time)")
             mask_no_startup = None    # 后续 baseline 守卫扩展将检查此变量
 
+        # ---------- 5a2. 总线一致性守卫 + 功率标定 (v14.1 P0) ----------
+        # 在 d87 步级守卫之后、L4 之前执行:
+        #   - FP: pred ON 但总线抬升不足以支撑预测功率 -> 强制 OFF
+        #   - 日级: 当日 inconsistent 比例过高 -> 整日清零 (OFF 日误报)
+        #   - FN: pred OFF 但总线抬升进入空调功率带且持续 -> 强制 ON
+        #   - 功率: 可信 ON 上用 lift/y_pred 中位比做有界缩放
+        # 开关优先级: bundle['bus_guard_meta'].enabled > env NILM_BUS_GUARD_*
+        try:
+            from bus_consistency_guard import (
+                apply_bus_consistency_guard,
+                build_bus_power_15min_from_bus_df,
+                default_meta_enabled_for_user,
+                DEFAULT_META as _BG_DEFAULT,
+            )
+            import json as _json_bg
+            import os as _os_bg
+
+            _bg_meta = None
+            # 1) bundle 内嵌
+            if isinstance(bundle.get("bus_guard_meta"), dict):
+                _bg_meta = dict(bundle["bus_guard_meta"])
+            # 2) 环境变量 JSON 覆盖/补充
+            _env_json = _os_bg.environ.get("NILM_BUS_GUARD_JSON", "").strip()
+            if _env_json:
+                try:
+                    _env_meta = _json_bg.loads(_env_json)
+                    if isinstance(_env_meta, dict):
+                        if _bg_meta is None:
+                            _bg_meta = dict(_BG_DEFAULT)
+                            _bg_meta.update(_env_meta)
+                        else:
+                            _bg_meta.update(_env_meta)
+                except Exception as _e_bg:
+                    log.warning(f"  [bus_guard] NILM_BUS_GUARD_JSON 解析失败: {_e_bg}")
+            # 3) 简易开关 env
+            _env_en = _os_bg.environ.get("NILM_BUS_GUARD_ENABLED", "").strip().lower()
+            if _env_en in ("1", "true", "yes", "on"):
+                if _bg_meta is None:
+                    _bg_meta = dict(_BG_DEFAULT)
+                _bg_meta["enabled"] = True
+            elif _env_en in ("0", "false", "no", "off"):
+                if _bg_meta is None:
+                    _bg_meta = dict(_BG_DEFAULT)
+                _bg_meta["enabled"] = False
+
+            if _bg_meta is not None and _bg_meta.get("enabled", False):
+                # v14.1.1: 传原始 5min 总线 (d87 日级签名) + 回归功率基底
+                # p_reg 在后处理前是完整回归输出; 此处 y 已乘 state, 用 p_reg 作 raw reg
+                _reg_base = np.asarray(p_reg, dtype=float).copy()
+                state_pred, y_pred, p_on, _bg_info = apply_bus_consistency_guard(
+                    state_pred, y_pred, p_on,
+                    bus_power_15min=None,
+                    timestamps=df.index,
+                    meta=_bg_meta,
+                    logger=log,
+                    bus_df=bus,
+                    y_pred_raw_reg=_reg_base,
+                )
+                # 同步分位带与 p_reg
+                if y_low is not None:
+                    y_low = np.asarray(y_low, dtype=float) * state_pred
+                if y_high is not None:
+                    y_high = np.asarray(y_high, dtype=float) * state_pred
+                p_reg = np.asarray(p_reg, dtype=float) * state_pred
+                # 若召回步 p_reg 为 0, 用 y_pred 回填
+                _miss = (state_pred == 1) & (p_reg <= 1)
+                if np.any(_miss):
+                    p_reg[_miss] = y_pred[_miss]
+                log.info(
+                    f"  [bus_guard] 完成: postproc_ON={int(state_pred.sum())}/{len(state_pred)}, "
+                    f"meanW={float(y_pred.mean()):.2f}"
+                )
+            else:
+                log.info("  [bus_guard] 未启用 (bundle/env 均未打开)")
+        except Exception as _bg_exc:
+            log.warning(f"  [bus_guard] 执行失败, 忽略并继续: {_bg_exc}")
+            import traceback as _tb_bg
+            log.debug(_tb_bg.format_exc())
+
     # ---------- 5b. L4 残差校正 (在主预测上加性校正) ----------
     # v6.8 重构: 三条预测轨并行保留, 便于评估 L4/L5 各自的实际收益
     #   y_pred_raw_main   : 无 L4 无 L5 (原始 MoE 预测) -> 对应 train_val 中的 main

@@ -442,7 +442,8 @@ def run_single_user(info, output_dir, skip_existing=False, log_file=None,
                     guard_enabled="",
                     splits_time_filter_spec="",
                     common_overrides_spec="",
-                    v14_flags_spec=""):
+                    v14_flags_spec="",
+                    bus_guard_json=""):
     """对单个用户调用 run_user_pipeline.py
 
     [v6.12.6+v6.15.0-graceful-v7] 三态返回:
@@ -501,6 +502,13 @@ def run_single_user(info, output_dir, skip_existing=False, log_file=None,
     # 与本批处理脚本 + 子进程 reconfigure 形成"端到端 UTF-8 一致" (Windows GBK 兼容)
     sub_env = dict(os.environ)
     sub_env.setdefault("PYTHONIOENCODING", "utf-8")
+    # [v14.1] 总线一致性守卫配置透传给 run_user_pipeline -> 05_inference
+    if bus_guard_json:
+        sub_env["NILM_BUS_GUARD_JSON"] = bus_guard_json
+        sub_env["NILM_BUS_GUARD_ENABLED"] = "1"
+    else:
+        sub_env.pop("NILM_BUS_GUARD_JSON", None)
+        # 不强制 pop ENABLED, 允许外部环境全局打开
     try:
         if log_file:
             with open(log_file, "a", encoding="utf-8") as lf:
@@ -892,6 +900,7 @@ def main():
         _splits_spec_str = ""   # [v13] per-split 过滤
         _common_overrides_str = ""   # [v13.5] 8 项 common 常量覆盖
         _v14_flags_str = getattr(args, "v14_flags", "")   # [v14] v14 增强开关
+        _bus_guard_json = ""  # [v14.1] 总线一致性守卫
         if time_filter_config:
             from time_filter_utils import (get_user_stage_spec, spec_to_cli_arg,
                                             spec_summary, get_user_guard_enabled,
@@ -936,6 +945,22 @@ def main():
                     import json as _json_batch
                     _v14_flags_str = _json_batch.dumps(_v14_dict, ensure_ascii=False)
                     print(f"  [v14] v14 增强配置: enabled={_v14_dict.get('v14_enable', False)}")
+            # [v14.1] bus_guard / bus_consistency_guard 用户级配置
+            _ucfg = time_filter_config.get(u["folder_name"], {})
+            if isinstance(_ucfg, dict):
+                _bg = _ucfg.get("bus_guard") or _ucfg.get("bus_consistency_guard")
+                if _bg is True:
+                    _bg = {"enabled": True}
+                if isinstance(_bg, dict) and _bg.get("enabled", True):
+                    import json as _json_batch
+                    _bg_out = dict(_bg)
+                    _bg_out.setdefault("enabled", True)
+                    _bus_guard_json = _json_batch.dumps(_bg_out, ensure_ascii=False)
+                    print(f"  [v14.1] bus_guard 启用: keys={list(_bg_out.keys())}")
+                elif _ucfg.get("bus_guard_enabled") is True:
+                    import json as _json_batch
+                    _bus_guard_json = _json_batch.dumps({"enabled": True}, ensure_ascii=False)
+                    print(f"  [v14.1] bus_guard_enabled=true")
 
         t0 = datetime.now()
         status, msg = run_single_user(u, output_dir, args.skip_existing, log_path,
@@ -945,7 +970,8 @@ def main():
                                        guard_enabled=_guard_enabled,
                                        splits_time_filter_spec=_splits_spec_str,
                                        common_overrides_spec=_common_overrides_str,
-                                       v14_flags_spec=_v14_flags_str)
+                                       v14_flags_spec=_v14_flags_str,
+                                       bus_guard_json=_bus_guard_json)
         t1 = datetime.now()
         dt = (t1 - t0).total_seconds()
         icon  = STATUS_ICON.get(status, "?")
