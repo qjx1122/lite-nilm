@@ -227,8 +227,9 @@ check(r62["off_day_fp"] == 0 and r62["off_day_false_on_kWh"] == 0.0,
       "T6.7 D2 ON 日 off_* 恒 0")
 check(abs(r62["on_only_mae_w"] - 100.0) < 1e-9,
       f"T6.8 D2 on_only_mae_w={r62['on_only_mae_w']} (=400/4=100.0)")
-check(abs(r62["MAE_W"] - 400.0 / 96.0) < 1e-9,
-      f"T6.9 D2 整体 MAE={r62['MAE_W']} (=400/96≈4.167, 口径对照)")
+# 注: builder 对 MAE 做 round(.,3) 落盘, 与连续值 400/96 差 ≤0.0005, 容差按舍入放宽
+check(abs(r62["MAE_W"] - 400.0 / 96.0) < 5e-4,
+      f"T6.9 D2 整体 MAE={r62['MAE_W']} (≈400/96≈4.167, 含 round3 报表舍入)")
 # 既有列不受影响 (T1 house-style 回归)
 keys6 = list(r61.keys())
 check(keys6.index("n_samples") < keys6.index("n_bus_raw") < keys6.index("Accuracy"),
