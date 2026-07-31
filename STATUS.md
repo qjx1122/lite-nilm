@@ -4,41 +4,42 @@
 > 更完整的历史见 `NILM_AC_session_summary_v13.17.md` + `V14_UPGRADE_REPORT.md`。
 
 ## 当前目标
-- NILM-AC v14 收尾（2026-07-31 本会话）：✅ 已完成 —— v14 单测补齐 + 遗留项修复 + 环境烟测
-- 下一会话：待指派（可选方向见"下一步"）
+- 已完成（2026-07-31 session 2）：**5 用户 v14 批量重跑 + 与上版对比 + 逐用户逐日问题详析** → 交付 `V14_RERUN_ANALYSIS.md`
+- 下一会话：待指派（候选：按报告 §6 P0 项实施——U842 梅雨先验修复 / 功率温度条件标定 / U0800 扩窗）
 
 ## 已完成
-- [x] v13.17 批量断点续跑 `--resume` + `batch_execution_state.csv`（37 组单测）
-- [x] v14 升级包（增强模块/包装入口/导出工具链/烟测脚本）+36 维物理指纹特征
-- [x] 环境恢复：`.venv`（Python 3.11.2 + numpy 1.26.4 + pandas 2.2.3 + sklearn 1.5.2）
-- [x] **本会话① 基线回归**：4 套存量单测 137 组断言（47+25+28+37）干净环境全过
-- [x] **本会话② 新增 `scripts/test_v14_enhancements.py`**：93 组断言 T1-T12 全过，v14_enhancements 9 个公开 API 全覆盖（此前 v14 只有 smoke 无 dedicated 单测，与 v13.x 惯例不符）
-- [x] **本会话③ 修复 `test_train_infer_symmetry.py` 可移植性**：原机绝对路径 `/home/user/nilm_ac_win` 硬编码致本仓库 FileNotFoundError → 支持 `NILM_ROOT` 环境变量 + 缺产物逐用户/整体 `[SKIP]` 退 0（/tmp 假产物实测解析路径正常）
-- [x] **本会话④ v14 烟测实测**：`v14_smoke_test.py` 用户 252844 ✅ 全过（val F1=0.9114/test F1=0.8673/MAE=124W，退出码 0）；用户 270778 系统项全过（121 维特征无 NaN、训推一致、推理形状合法）但 test F1=0.119 未过质量门
-- [x] **本会话⑤ v14 工具链健全性**：5 个 v14 入口 py_compile 全过；`v14_model_analyzer.py --precision int8 --prune` 用合成 bundle 全路径实测（结构分析/MoE 遍历/Flash 17.7KB 估算/剪枝建议）
+- [x] v14 收尾（session 1）：93 组 v14 单测全过 + symmetry 测试可移植性修复 + 烟测/工具链实测
+- [x] **批量重跑**：`run_batch_users.py --time-filter-config data/time_filters.json --force-retrain`，5/5 ok，542s，泄漏检测过，装 lightgbm 4.7.0 对齐上版模型形态
+- [x] **三版对比**（base/上版/本次，仅7月口径）：均值 F1 0.962（=上版, base+0.007）、MAE 121.2W、SAE 24.2%
+- [x] **U2844 bus_guard v14.1.1 修复验证**：7/1–7/4 OFF 日 FP 44→0，7/5 FN 36→22，F1 0.897→0.962
+- [x] **U842 改口径适配**：本次推理含 6 月验证段（n=1340 F1=0.893），仅7月口径重切（F1=0.932 vs 上版 0.991，窗口改制代价+风险暴露）
+- [x] **U842 7/6 整日崩塌根因实锤（P8 天气先验失配）**：p_on=0.05 / 全维扫描 Top 偏差全为天气族（diurnal 1.87σ/humidity 1.24σ）/ 梅雨组 p_on 0.684 vs 晴热组 0.990 / 6·21(26.2°C RH86)同签名复现
+- [x] 逐用户逐日问题表（75+ 天全部标注 P1–P8）+ 整改路线图 → `V14_RERUN_ANALYSIS.md`
 
 ## 进行中
 - （无）
 
-## 下一步（TODO）
-1. 接收下一会话具体任务
-2. （可选）270778 test F1 偏低深挖：best_thr=0.93 极端校准 + 初夏→盛夏季节性切分是主因疑似；可在烟测纳入 val 阈值合理性检查或换 global_stratified 对比
-3. （可选）`14_train_v14.py` 端到端实跑：需选定用户 + env 配置（monkey-patch 集成路径本环境只做了编译级验证）
-4. （长期 roadmap，V14 报告 §九）P1 CNN-LSTM/Seq2Point 基线、跨用户迁移学习；P2 在线增量学习、FHMM/CO 基线；P3 V-I 轨迹、多设备辨识
+## 下一步（TODO，按优先级）
+1. **P0 U842 梅雨先验修复**：天气特征去独断（限分裂收益/剔除 1-2 个）+ 6/19、6/21 类代表日回流训练（<7/1）→ 重跑验证 7/6
+2. **P0 功率温度条件标定**（residual×温桶）：U0778（62%）、U0800（62%）、U0789（78%）电量不可用
+3. **P0 U0800 训练窗 6 天→6 月底**（数据 5/21 起有 40 天）
+4. **P1 U2844 标定方向修正**（该用户 7 月为高估 +6%，现 fixed_scale=0.85 按低估设计）+ 中档偏弱 ON 增强（7/5 类）
+5. **P1 U0789 分路/双开建模**；日报指标改版（ON/OFF 拆分、false_on_kWh）
+6. （长期）V14 报告 §九 P1-P3 roadmap
 
 ## 决策记录 / 踩坑
-- 仓库无 `setup.sh`/`pnpm`，依赖按 `requirements.txt` 装入 `.venv`（被 .gitignore 排除，不入库）
-- 本环境**无 lightgbm/skl2onnx**：EnsembleClf 自动降级纯 GBDT（已测零回归）、ONNX 导出返回 None（已测不崩）——降级路径均按设计工作
-- 测试设计踩坑（已修正）：①5σ 异常检出需尖峰占比 <3.8%（5% 时 z≈4.4 反而检不出，改用 1.5%）；②focal 二轮权重含 (1-alpha) 保底项，gamma↑ 归一化后难/易比反而→1（初版断言方向写反，数值复核后修正）；③T1.7 权重比容差 1e-9 太严，理论值有 2.7e-8 浮点 ulp 差，放宽到 1e-6
-- 合成 bundle 造 MoE 勿用 `type()` 匿名类（不可 pickle），用 `types.SimpleNamespace`
-- 270778 烟测 F1 未过属**数据特性**非代码缺陷：对齐仅 5280 样本（5/21-7/15），stratified_day 把 7 月高温日切进 test，val 上 best_thr 搜到 0.93 → test 召回坍塌；同套烟测在 252844 全过；且该用户群在 V14_U2844_P0_FIX 报告中有已知 low/mid 档难度记录
-- 工作风格（INTJ）：中文回复；结论以硬证据支撑；清理前确认可恢复；日志 ASCII 标记
-- 会话固定分支 `arena/019fb816-lite-nilm`
+- **⚠️ venv 不跨 session 持久**：bash 快照剔除 `.venv`，每个新 session 开头必须 `python3 -m venv .venv && pip install -r requirements.txt`（~25s）；需 lightgbm 时另装（~3s）
+- bundle.pkl 反序列化需 `sys.path.insert(0,"scripts")`（EnsembleClf 在 v14_enhancements 模块内）；本仓库 bundle 键为 `feat_cols/feat_names/clf/scaler/best_thr/...`
+- artifacts/models/logs 被 .gitignore 排除不入库（快照内仍保留在本地工作区），报告引用其相对路径与仓库惯例一致
+- U842 与上版对比必须**按 ≥2026-07-01 重切**（本次推理 n=2780=6月验证段1340+7月1440，上版表 3.1 仅 7 月；真值 kWh 138.6 两侧一致口径自洽）
+- U842 7/6 排查路径：排除数据事故（原始 d73/分路/气象缓存正常）→ p_on 崩塌在分类层 → 168 维全维扫描定位天气族 → 湿度 Middling 陷阱（ON 窗湿度 93 vs 日均 88；日均口径否决"湿度独因"假设，转向温差/cooling_degree 联合签名）→ 6/21 同签名复现确认 P8
+- 5σ 异常/focal gamma 测试设计踩坑记录见 git log（session 1 commit）
 
 ## 关键文件路径
-- `STATUS.md` — 本文件
-- `scripts/test_v14_enhancements.py` — **本会话新增** v14 单测（93 断言）
-- `scripts/v14_enhancements.py` / `14_train_v14.py` / `v14_smoke_test.py` / `v14_model_analyzer.py` — v14 核心
-- `scripts/test_train_infer_symmetry.py` — 本会话修复可移植性（NILM_ROOT）
-- `NILM_AC_session_summary_v13.17.md` / `REPORT.md` / `V14_UPGRADE_REPORT.md` — 上下文文档
-- `data/trains` / `data/infers` / `data/time_filters.json` — 5 用户数据与配置
+- `STATUS.md` — 本文件 | `V14_RERUN_ANALYSIS.md` — **本次主交付**（对比+逐日详析）
+- `V14_BATCH_COMPARISON.md` / `V14_DAILY_METRICS_ANALYSIS.md` — 上版对比基线
+- `data/time_filters.json` — 5 用户配置（U2844 含 bus_guard v14.1.1；U842 为 P0 v3 窗口+6月验证段）
+- `artifacts/infers/<user>/inference_daily_metrics.csv` / `inference_result.csv` — 逐日/逐点
+- `logs/_batch/batch_run_20260731_151530.log` — 批跑日志（bus_guard 统计在此）
+- `models/<user>/nilm_ac_two_stage.pkl` — v14 bundle（clf=EnsembleClf）
+- `scripts/test_v14_enhancements.py` — v14 单测 93 断言（session 1）
