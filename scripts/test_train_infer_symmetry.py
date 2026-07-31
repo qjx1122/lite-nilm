@@ -9,16 +9,25 @@
   正确的"无守卫"模拟 = 守卫压制前的 state_pred
   推理时步骤: raw_state -> postprocess -> state_pred -> [守卫压制] -> final state
   守卫压制的 N 步 = (postprocess 后是 1 但守卫后变 0) -> 加回去 = 模拟无守卫
+
+可移植性 (v14 收尾修复):
+  - 原为原开发机绝对路径 /home/user/nilm_ac_win, 在本仓库 (lite-nilm) 直接崩溃
+  - 现支持 `NILM_ROOT` 环境变量覆盖项目根; 默认仍优先原路径 (向后兼容)
+  - 依赖真实运行产物 (results_v6_15_0/<user>/predictions|logs), 缺产物 -> [SKIP]
+  - 全部用户缺产物时整体 [SKIP] 退出码 0 (属历史分析型测试, 不是自包含单测)
 """
 import sys
-sys.path.insert(0, '/home/user/nilm_ac_win/scripts')
+import os
 import joblib, json
 import pandas as pd
 import numpy as np
 import re
 from pathlib import Path
 
-ROOT = Path('/home/user/nilm_ac_win')
+ROOT = Path(os.environ.get('NILM_ROOT', '/home/user/nilm_ac_win'))
+if not (ROOT / 'scripts').exists():
+    ROOT = Path(__file__).resolve().parent.parent  # 回退: 本仓库根 (lite-nilm)
+sys.path.insert(0, str(ROOT / 'scripts'))
 RESULT_ROOT = ROOT / 'results_v6_15_0'
 
 def cls_metrics(s_true, s_pred):
@@ -55,8 +64,23 @@ def parse_log(log_path):
 print("="*100)
 print(" 训练/推理一致性影响量化测试 (v6.15.0) - 修正版")
 print("="*100)
+print(f"[INFO] PROJECT_ROOT = {ROOT}")
+print(f"[INFO] RESULT_ROOT  = {RESULT_ROOT}")
 
 USERS = ['user1_270848', 'user2_252844', 'user3_270825']
+
+def _pred_csv(u):
+    return RESULT_ROOT / u / 'predictions' / 'inference_result.csv'
+
+n_available = sum(1 for u in USERS if _pred_csv(u).exists())
+if not RESULT_ROOT.exists() or n_available == 0:
+    print(f"\n[SKIP] 无可用运行产物 (RESULT_ROOT 存在={RESULT_ROOT.exists()}, "
+          f"有预测 CSV 的用户数={n_available}/{len(USERS)})")
+    print("  本测试依赖真实批跑产物 (inference_result.csv + train/infer 日志),")
+    print("  属历史分析型测试; 无产物环境 (本仓库/CI) 整体跳过, 退出码 0。")
+    print("  如需实跑: 先用 run_batch_users.py 产出 results_v6_15_0/, "
+          "或 NILM_ROOT=<项目根> 指定。")
+    sys.exit(0)
 
 # ================================================================
 # 测试 1: ON_THR 不对称
@@ -68,7 +92,10 @@ print(f"\n{'用户':<18} {'灰色样本':<15} {'F1@10W':<10} {'F1@50W':<10} {'Δ
 print("-"*100)
 
 for u in USERS:
-    pred = pd.read_csv(RESULT_ROOT / u / 'predictions' / 'inference_result.csv')
+    if not _pred_csv(u).exists():
+        print(f"{u:<18} [SKIP] 缺 {_pred_csv(u).relative_to(RESULT_ROOT)}")
+        continue
+    pred = pd.read_csv(_pred_csv(u))
     y_t = pred['y_true_W'].values
     s_p = pred['state_pred_main'].values
     s_t_10, s_t_50 = (y_t >= 10).astype(int), (y_t >= 50).astype(int)
@@ -91,10 +118,15 @@ print(f"\n{'用户':<18} {'推理总步':<8} {'守卫前ON':<10} {'守卫后ON':
 print("-"*120)
 
 for u in USERS:
+    if not _pred_csv(u).exists():
+        print(f"{u:<18} [SKIP] 缺 inference_result.csv")
+        continue
     logs = sorted((RESULT_ROOT / u / 'logs').glob('infer_*.log'))
-    if not logs: continue
+    if not logs:
+        print(f"{u:<18} [SKIP] 缺 infer_*.log (无法提取守卫统计)")
+        continue
     info = parse_log(logs[-1])
-    pred = pd.read_csv(RESULT_ROOT / u / 'predictions' / 'inference_result.csv')
+    pred = pd.read_csv(_pred_csv(u))
     y_t = pred['y_true_W'].values
     s_p_after = pred['state_pred_main'].values
     s_t = (y_t >= 50).astype(int)
@@ -135,13 +167,21 @@ print(f"\n{'用户':<18} {'val F1(训练侧)':<15} {'OOD F1(推理侧)':<15} {'�
 print("-"*100)
 
 for u in USERS:
+    if not _pred_csv(u).exists():
+        print(f"{u:<18} [SKIP] 缺 inference_result.csv")
+        continue
     train_logs = sorted((RESULT_ROOT / u / 'logs').glob('train_*.log'))
-    if not train_logs: continue
+    if not train_logs:
+        print(f"{u:<18} [SKIP] 缺 train_*.log (无法提取 val F1)")
+        continue
     txt = train_logs[-1].read_text()
     m_val = re.search(r"Val\s+cls: \{[^}]*'F1': ([\d.]+)", txt)
     val_f1 = float(m_val.group(1)) if m_val else None
+    if val_f1 is None:
+        print(f"{u:<18} [SKIP] train 日志未找到 Val cls F1 (格式不匹配)")
+        continue
 
-    pred = pd.read_csv(RESULT_ROOT / u / 'predictions' / 'inference_result.csv')
+    pred = pd.read_csv(_pred_csv(u))
     y_t = pred['y_true_W'].values
     s_p = pred['state_pred_main'].values
     f1_ood_50 = cls_metrics((y_t>=50).astype(int), s_p)['F1']
