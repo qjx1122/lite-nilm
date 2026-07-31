@@ -1,14 +1,31 @@
 {
   "_comment_": "[v14 OOD评估] 所有用户仅修改 train/infer 时段过滤: 2026-07-01前用于训练, 2026-07-01及以后用于推理; 其他配置(guard_enabled/target_col/on_thr_w/splits/enable_auto_split等)保持8bc0490原始版本不变.",
-
   "800080252842_4206894986488": {
-    "_note_": "[v13.18-phase3 balanced 端到端] enable_auto_split=true, mode=balanced. 训练集排除2026-07-01及以后, 推理集仅保留2026-07-01及以后.",
+    "_note_": "[v13.18-phase3 balanced] enable_auto_split=true, mode=balanced. 训练≤2026-06-04; 推理含2026-06-05~06-29 + ≥2026-07-01 OOD.",
     "guard_enabled": false,
     "target_col": "p1",
     "enable_auto_split": true,
     "auto_split_mode": "balanced",
-    "train": {"include": [["2025-07-10", "2026-06-30"]]},
-    "infer": {"include": [["2026-07-01", "2026-12-31"]]},
+    "train": {
+      "include": [
+        [
+          "2025-07-10",
+          "2026-06-04"
+        ]
+      ]
+    },
+    "infer": {
+      "include": [
+        [
+          "2026-06-05",
+          "2026-06-29"
+        ],
+        [
+          "2026-07-01",
+          "2026-12-31"
+        ]
+      ]
+    },
     "v14": {
       "v14_enable": true,
       "physics": true,
@@ -20,31 +37,50 @@
       "diag": true
     }
   },
-
   "800080252844_4206894986488": {
     "_note_": "[v13+v14.1] 变频空调用户; d87尖峰弱关闭d87守卫; 启用总线一致性守卫+功率标定解决7月OFF日误报与ON日漏检/低估.",
     "guard_enabled": false,
     "target_col": "p2",
     "splits": {
-      "train": {"include": []},
-      "val":   {"include": []},
-      "test":  {"include": []}
+      "train": {
+        "include": []
+      },
+      "val": {
+        "include": []
+      },
+      "test": {
+        "include": []
+      }
     },
-    "train": {"include": [["2025-07-10", "2026-06-04"]]},
-    "infer": {"include": [["2026-07-01", "2026-12-31"]]},
+    "train": {
+      "include": [
+        [
+          "2025-07-10",
+          "2026-06-04"
+        ]
+      ]
+    },
+    "infer": {
+      "include": [
+        [
+          "2026-07-01",
+          "2026-12-31"
+        ]
+      ]
+    },
     "bus_guard": {
       "enabled": true,
       "version": "v14.1.1_d87_day_power",
       "d87_col": "load_iden_data87",
       "day_absmax_th": 110.0,
-      "startup_thr": 0.40,
+      "startup_thr": 0.4,
       "use_original_state_if_higher": true,
       "post_min_on": 1,
       "post_fill_short_off": 3,
       "power_calib_enable": true,
       "train_on_mean_w": 736.0,
       "fixed_scale": 0.85,
-      "scale_lo": 0.70,
+      "scale_lo": 0.7,
       "scale_hi": 1.05,
       "scale_deadzone_lo": 0.97,
       "scale_deadzone_hi": 1.03
@@ -60,7 +96,6 @@
       "diag": true
     }
   },
-
   "800080270778_4200903422131": {
     "_note_": "[v13] 变频小功率空调用户, 显式关闭守卫. 保留8bc0490业务配置; train/infer 按时序OOD统一为7月前训练、7月及以后推理(已移除原train中的7/1-7/8段).",
     "target_col": "p2",
@@ -69,17 +104,28 @@
     "splits": {
       "train": {
         "include": [
-          ["2026-06-24", "2026-06-25"]
+          [
+            "2026-06-24",
+            "2026-06-25"
+          ]
         ]
       }
     },
     "train": {
       "include": [
-        ["2026-05-21", "2026-06-08"]
+        [
+          "2026-05-21",
+          "2026-06-08"
+        ]
       ]
     },
     "infer": {
-      "include": [["2026-07-01", "2026-12-31"]]
+      "include": [
+        [
+          "2026-07-01",
+          "2026-12-31"
+        ]
+      ]
     },
     "v14": {
       "v14_enable": true,
@@ -92,19 +138,38 @@
       "diag": true
     }
   },
-
   "800080270789_4206680982373": {
     "_note_": "[v13] 变频小功率空调用户(target=p1+p2复合列, on_thr=60W), 显式关闭守卫. 保留原始配置.",
     "target_col": "p1+p2",
     "on_thr_w": 60.0,
     "guard_enabled": false,
     "splits": {
-      "train": {"include": []},
-      "val":   {"include": []},
-      "test":  {"include": []}
+      "train": {
+        "include": []
+      },
+      "val": {
+        "include": []
+      },
+      "test": {
+        "include": []
+      }
     },
-    "train": {"include": [["2026-05-21", "2026-06-04"]]},
-    "infer": {"include": [["2026-07-01", "2026-12-31"]]},
+    "train": {
+      "include": [
+        [
+          "2026-05-21",
+          "2026-06-04"
+        ]
+      ]
+    },
+    "infer": {
+      "include": [
+        [
+          "2026-07-01",
+          "2026-12-31"
+        ]
+      ]
+    },
     "v14": {
       "v14_enable": true,
       "physics": true,
@@ -116,19 +181,38 @@
       "diag": true
     }
   },
-
   "800080270800_4200904302272": {
     "_note_": "[v13] 变频小功率空调用户(on_thr=50W), 显式关闭守卫. 保留原始配置.",
     "target_col": "p1",
     "on_thr_w": 50.0,
     "guard_enabled": false,
     "splits": {
-      "train": {"include": []},
-      "val":   {"include": []},
-      "test":  {"include": []}
+      "train": {
+        "include": []
+      },
+      "val": {
+        "include": []
+      },
+      "test": {
+        "include": []
+      }
     },
-    "train": {"include": [["2026-05-27", "2026-06-01"]]},
-    "infer": {"include": [["2026-07-01", "2026-12-31"]]},
+    "train": {
+      "include": [
+        [
+          "2026-05-27",
+          "2026-06-01"
+        ]
+      ]
+    },
+    "infer": {
+      "include": [
+        [
+          "2026-07-01",
+          "2026-12-31"
+        ]
+      ]
+    },
     "v14": {
       "v14_enable": true,
       "physics": true,
@@ -140,9 +224,22 @@
       "diag": true
     }
   },
-
   "_default": {
-    "train": {"exclude": [["2026-07-01", "2026-12-31"]]},
-    "infer": {"include": [["2026-07-01", "2026-12-31"]]}
+    "train": {
+      "exclude": [
+        [
+          "2026-07-01",
+          "2026-12-31"
+        ]
+      ]
+    },
+    "infer": {
+      "include": [
+        [
+          "2026-07-01",
+          "2026-12-31"
+        ]
+      ]
+    }
   }
 }
