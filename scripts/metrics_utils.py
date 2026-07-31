@@ -503,6 +503,7 @@ def build_daily_metrics_rows(timestamps, y_true, y_pred, s_true, s_pred,
         Accuracy, Precision, Recall, F1, AUC,
         MAE_W, RMSE_W, SAE, kWh_true, kWh_pred, kWh_err,
         TP, FP, FN, TN,
+        is_on_day, off_day_fp, off_day_false_on_kWh, on_only_mae_w  ([v14.2] P7 口径),
         [dataset (若 date_labels 提供)],
         [+ extra 字段]
     """
@@ -583,6 +584,20 @@ def build_daily_metrics_rows(timestamps, y_true, y_pred, s_true, s_pred,
         if branch_daily_counts is not None:
             n_branch_raw = int(branch_daily_counts.get(date_str, 0))
 
+        # [v14.2] P7 口径列 (ON/OFF 日拆分, 防"全 OFF 日 F1=0 污染观感"):
+        #   is_on_day:            当天真值含 ON (TP+FN>0) 记 1, 全 OFF 记 0
+        #   off_day_fp:           仅全 OFF 日有意义: 当日 FP 数 (ON 日恒 0)
+        #   off_day_false_on_kWh: 仅全 OFF 日有意义: 当日误报电量 (ON 日恒 0.0)
+        #   on_only_mae_w:        仅真 ON 点上的 MAE (无 ON 点 -> "" 空字符串);
+        #                         全 OFF 日看 off_day_*, ON 日看 on_only_mae_w + SAE,
+        #                         避免用整体 F1/MAE 同时衡量两类日
+        _is_on_day = int((tp + fn) > 0)
+        _off_fp = int(fp) if not _is_on_day else 0
+        _false_on_kwh = round(kwh_pred, 6) if not _is_on_day else 0.0
+        _on_mask = st == 1
+        _on_only_mae = (float(np.mean(np.abs(yp[_on_mask] - yt[_on_mask])))
+                        if _on_mask.any() else None)
+
         row = {
             "date": date_str,
             "split": split_name,
@@ -602,6 +617,11 @@ def build_daily_metrics_rows(timestamps, y_true, y_pred, s_true, s_pred,
             "kWh_pred": round(kwh_pred, 6),
             "kWh_err": round(kwh_err, 6),
             "TP": int(tp), "FP": int(fp), "FN": int(fn), "TN": int(tn),
+            "is_on_day": _is_on_day,                       # [v14.2]
+            "off_day_fp": _off_fp,                         # [v14.2]
+            "off_day_false_on_kWh": _false_on_kwh,         # [v14.2]
+            "on_only_mae_w": (round(_on_only_mae, 3)
+                              if _on_only_mae is not None else ""),  # [v14.2]
         }
         if date_labels is not None:
             row["dataset"] = date_labels.get(date_str, "")

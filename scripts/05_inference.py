@@ -704,6 +704,65 @@ def main():
         else:
             log.info("[L5] 未找到合适的 fallback 模型, 跳过切换")
 
+    # ---------- 6c. [v14.2] 推理端可选标定 (时段先验抑制 + 功率温桶标定) ----------
+    # 开关: env NILM_TIME_PRIOR_JSON / NILM_POWER_TEMP_CALIB_JSON
+    #   (run_batch_users 从 time_filters.json 用户级配置注入, 默认关闭零回归)
+    # 参数纪律: LUT/先验全部来自 bundle 内训练侧统计, 不接触任何推理期标签,
+    #   保证评估集零泄漏 (V14_RERUN_ANALYSIS.md P4/P5/P3 整改项)
+    try:
+        from power_temp_calib import (apply_time_prior_suppress,
+                                      apply_power_temp_calib)
+        import json as _json_c
+        import os as _os_c
+
+        # 6c-1. 时段先验抑制 (先压 FP, 再算功率标定)
+        _env_tpr = _os_c.environ.get("NILM_TIME_PRIOR_JSON", "").strip()
+        if _env_tpr:
+            _cfg_tpr = None
+            try:
+                _cfg_tpr = _json_c.loads(_env_tpr)
+            except Exception as _e_tpr:
+                log.warning(f"  [v14.2 time_prior] JSON 解析失败: {_e_tpr}; raw={_env_tpr[:120]}")
+            if isinstance(_cfg_tpr, dict) and _cfg_tpr.get("enable", False):
+                _prior = bundle.get("hourly_on_prior")
+                if _prior:
+                    state_pred, _info_tpr = apply_time_prior_suppress(
+                        state_pred, p_on, df.index, _prior,
+                        low_rate=float(_cfg_tpr.get("low_rate", 0.01)),
+                        p_req=float(_cfg_tpr.get("p_req", 0.9)), logger=log)
+                    if _info_tpr.get("n_suppressed", 0) > 0:
+                        y_pred = np.asarray(y_pred, dtype=float) * state_pred
+                        if y_low is not None:
+                            y_low = np.asarray(y_low, dtype=float) * state_pred
+                        if y_high is not None:
+                            y_high = np.asarray(y_high, dtype=float) * state_pred
+                else:
+                    log.info("  [v14.2 time_prior] bundle 无 hourly_on_prior, 跳过")
+
+        # 6c-2. 功率温桶标定 (lift-only; state 不再变化)
+        _env_ptc = _os_c.environ.get("NILM_POWER_TEMP_CALIB_JSON", "").strip()
+        if _env_ptc:
+            _cfg_ptc = None
+            try:
+                _cfg_ptc = _json_c.loads(_env_ptc)
+            except Exception as _e_ptc:
+                log.warning(f"  [v14.2 power_temp_calib] JSON 解析失败: {_e_ptc}; raw={_env_ptc[:120]}")
+            if isinstance(_cfg_ptc, dict) and _cfg_ptc.get("enable", False):
+                _lut = bundle.get("branch_temp_power_lut")
+                if _lut and (weather_df is not None):
+                    y_pred, _info_ptc = apply_power_temp_calib(
+                        y_pred, state_pred, df.index, weather_df, _lut,
+                        gamma=float(_cfg_ptc.get("gamma", 0.85)),
+                        stat=str(_cfg_ptc.get("stat", "p50")),
+                        min_gain=float(_cfg_ptc.get("min_gain", 1.05)),
+                        logger=log)
+                elif not _lut:
+                    log.info("  [v14.2 power_temp_calib] bundle 无 LUT (训练时无气象), 跳过")
+                else:
+                    log.info("  [v14.2 power_temp_calib] 推理侧无气象数据, 跳过")
+    except Exception as _e_v142:
+        log.warning(f"  [v14.2] 可选标定执行失败, 忽略并继续: {_e_v142}")
+
     # ---------- 7. 保存推理结果 CSV (含所有基线预测) ----------
     y_true = df["y_ac"].values.astype(np.float32) if has_label else None
     # v6.12.6 单口径: OOD 评估用 ON_THR_W=10W (与训练标签同口径)

@@ -443,7 +443,9 @@ def run_single_user(info, output_dir, skip_existing=False, log_file=None,
                     splits_time_filter_spec="",
                     common_overrides_spec="",
                     v14_flags_spec="",
-                    bus_guard_json=""):
+                    bus_guard_json="",
+                    power_temp_calib_json="",
+                    time_prior_json=""):
     """对单个用户调用 run_user_pipeline.py
 
     [v6.12.6+v6.15.0-graceful-v7] 三态返回:
@@ -509,6 +511,15 @@ def run_single_user(info, output_dir, skip_existing=False, log_file=None,
     else:
         sub_env.pop("NILM_BUS_GUARD_JSON", None)
         # 不强制 pop ENABLED, 允许外部环境全局打开
+    # [v14.2] 推理端可选标定配置透传 (功率温桶标定 / 时段先验抑制)
+    if power_temp_calib_json:
+        sub_env["NILM_POWER_TEMP_CALIB_JSON"] = power_temp_calib_json
+    else:
+        sub_env.pop("NILM_POWER_TEMP_CALIB_JSON", None)
+    if time_prior_json:
+        sub_env["NILM_TIME_PRIOR_JSON"] = time_prior_json
+    else:
+        sub_env.pop("NILM_TIME_PRIOR_JSON", None)
     try:
         if log_file:
             with open(log_file, "a", encoding="utf-8") as lf:
@@ -961,6 +972,19 @@ def main():
                     import json as _json_batch
                     _bus_guard_json = _json_batch.dumps({"enabled": True}, ensure_ascii=False)
                     print(f"  [v14.1] bus_guard_enabled=true")
+            # [v14.2] power_temp_calib / time_prior 用户级配置 (推理端可选标定)
+            _power_temp_calib_json = ""
+            _time_prior_json = ""
+            if isinstance(_ucfg, dict):
+                import json as _json_batch2
+                _pc = _ucfg.get("power_temp_calib")
+                if isinstance(_pc, dict) and _pc.get("enable", False):
+                    _power_temp_calib_json = _json_batch2.dumps(_pc, ensure_ascii=False)
+                    print(f"  [v14.2] power_temp_calib 启用: {_power_temp_calib_json}")
+                _tpr = _ucfg.get("time_prior")
+                if isinstance(_tpr, dict) and _tpr.get("enable", False):
+                    _time_prior_json = _json_batch2.dumps(_tpr, ensure_ascii=False)
+                    print(f"  [v14.2] time_prior 启用: {_time_prior_json}")
 
         t0 = datetime.now()
         status, msg = run_single_user(u, output_dir, args.skip_existing, log_path,
@@ -971,7 +995,9 @@ def main():
                                        splits_time_filter_spec=_splits_spec_str,
                                        common_overrides_spec=_common_overrides_str,
                                        v14_flags_spec=_v14_flags_str,
-                                       bus_guard_json=_bus_guard_json)
+                                       bus_guard_json=_bus_guard_json,
+                                       power_temp_calib_json=_power_temp_calib_json,
+                                       time_prior_json=_time_prior_json)
         t1 = datetime.now()
         dt = (t1 - t0).total_seconds()
         icon  = STATUS_ICON.get(status, "?")

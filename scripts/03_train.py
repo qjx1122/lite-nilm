@@ -1018,6 +1018,27 @@ def main():
 
     # 清除 MoE 中不可 pickle 的闭包函数 (gbr_factory) 和 logger
     moe.strip_for_save()
+
+    # [v14.2] 训练侧先验统计 (供推理端可选标定/抑制; 统计只用训练窗数据, 零泄漏):
+    #   - branch_temp_power_lut: 分路 ON 功率 × 温度桶分位 (修 P4/P5 推理低估)
+    #   - hourly_on_prior:     逐小时 ON 率先验 (修 P3 边界 FP 毛刺)
+    # 统计仅描述训练分布, 推理端是否启用由用户级 JSON 配置决定 (默认关, 零回归)
+    branch_temp_power_lut = None
+    hourly_on_prior = None
+    try:
+        from power_temp_calib import (build_branch_temp_power_lut,
+                                      build_hourly_on_prior)
+        _s_true_all = (df["y_ac"].values.astype(float) >= ON_THR_W).astype(int)
+        hourly_on_prior = build_hourly_on_prior(df.index, _s_true_all)
+        if USE_WEATHER_FEATURES and weather_df is not None:
+            branch_temp_power_lut = build_branch_temp_power_lut(
+                df.index, df["y_ac"].values.astype(float), weather_df,
+                on_thr=ON_THR_W)
+            log.info(f"  [v14.2] 功率温桶 LUT: "
+                     f"{len(branch_temp_power_lut.get('bins', {}))} 桶 -> bundle")
+    except Exception as _e_ptc:
+        log.warning(f"  [v14.2] 训练侧先验统计失败 (不影响训练): {_e_ptc}")
+
     bundle = {
         "scaler": scaler, "clf": clf, "rf": rf,
         "moe": moe,
@@ -1061,6 +1082,9 @@ def main():
         "temp_power_lut":        temp_power_lut,   # v6 L1: 用于推理重建漂移特征
         "use_residual_calib":    USE_RESIDUAL_CALIB,
         "residual_calib":        residual_calib,   # v6 L4: 残差校正器
+        # [v14.2] 推理端可选标定用训练侧统计 (None=该用户未启用/无气象)
+        "branch_temp_power_lut": branch_temp_power_lut,
+        "hourly_on_prior":       hourly_on_prior,
         "use_temp_based_season": USE_TEMP_BASED_SEASON,
         "weather_latitude":      WEATHER_LATITUDE,
         "weather_longitude":     WEATHER_LONGITUDE,
