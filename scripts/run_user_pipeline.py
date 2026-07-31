@@ -788,6 +788,9 @@ def main():
                          "post_min_on/post_fill_short_off/weather_latitude/weather_longitude/"
                          "use_weather_features/use_temp_based_season). "
                          "内部会翻译为 NILM_USER_<字段名大写> 环境变量给 03_train.py")
+    ap.add_argument("--v14-flags", default="",
+                    help="[v14] JSON 字符串, 用户级 v14 增强开关配置. "
+                         "例如: '{\"v14_enable\":true,\"physics\":true,...}'.")
     args = ap.parse_args()
 
     project_root = Path(__file__).resolve().parent.parent
@@ -858,6 +861,35 @@ def main():
                 print(f"  [v13.5] 用户级 common 覆盖 {len(_applied)} 项: {', '.join(_applied)}")
         except Exception as e:
             print(f"  [v13.5 WARN] --common-overrides 解析失败 ({e}), 忽略, 走 common.py 默认")
+
+    # [v14] 用户级 v14 增强配置 (--v14-flags CLI + NILM_V14_* env)
+    v14_enable_flag = False
+    if getattr(args, "v14_flags", "").strip():
+        try:
+            _v14_cfg = json.loads(args.v14_flags)
+            if isinstance(_v14_cfg, dict):
+                v14_enable_flag = bool(_v14_cfg.get("v14_enable", _v14_cfg.get("v14_enabled", False)))
+                _v14_env_map = {
+                    "v14_enable": "NILM_V14_ENABLE",
+                    "v14_enabled": "NILM_V14_ENABLE",
+                    "physics": "NILM_V14_PHYSICS_FEATURES",
+                    "physics_features": "NILM_V14_PHYSICS_FEATURES",
+                    "focal": "NILM_V14_FOCAL",
+                    "ensemble": "NILM_V14_ENSEMBLE",
+                    "calibrate": "NILM_V14_CALIBRATE",
+                    "auto_config": "NILM_V14_AUTO_CONFIG",
+                    "health": "NILM_V14_HEALTH_REPORT",
+                    "health_report": "NILM_V14_HEALTH_REPORT",
+                    "diag": "NILM_V14_DATA_DIAG",
+                    "data_diag": "NILM_V14_DATA_DIAG",
+                }
+                for k, env_name in _v14_env_map.items():
+                    if k in _v14_cfg:
+                        os.environ[env_name] = "1" if _v14_cfg[k] else "0"
+                if v14_enable_flag:
+                    print(f"  [v14] 启用 v14 增强训练入口 (v14_enable={v14_enable_flag})")
+        except Exception as e:
+            print(f"  [v14 WARN] --v14-flags 解析失败 ({e})")
 
     # [v13.6] 计算本次分析用的 on_thr_w (与训练评估同口径)
     #   优先级: --common-overrides.on_thr_w > common.ON_THR_W 默认
@@ -952,7 +984,8 @@ def main():
                 print(f"  [v12] 训练时段过滤已启用 (spec 长度 {len(args.train_time_filter_spec)} 字节)")
             try:
                 run_step(cmd02, "02 对齐+特征", project_root)
-                run_step([PY, "03_train.py"], "03 训练", project_root)
+                train_script = "14_train_v14.py" if (v14_enable_flag or os.environ.get("NILM_V14_ENABLE") == "1") else "03_train.py"
+                run_step([PY, train_script], f"03 训练 ({train_script})", project_root)
                 run_step([PY, "04_evaluate.py"], "04 评估", project_root)
 
                 # [v13.10] 训练完成后, 从 bundle 读 train_dates/val_dates/test_dates

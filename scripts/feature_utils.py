@@ -5,6 +5,7 @@
 - 训练/推理共享, 保证特征构造一致性
 - v5 新增: 12 维温度衍生特征 (依赖 weather_utils 拉取的温度 DataFrame)
 """
+import os
 import numpy as np
 import pandas as pd
 from common import SENT_VALUE, RESAMPLE, TARGET_COL
@@ -337,7 +338,11 @@ def build_features(df: pd.DataFrame, top_cols: list,
     #   (E) 时间上下文: 距上次开/关机时长; 当前时刻距当日首个启动点
     #   (F) 跨列比值特征: 多电参量间的比值 (物理不变量)
     # ============================================================
-    _add_nilm_physics_features(X, df, top_cols)
+    # [v14 方向⑧新增] NILM 物理指纹增强特征 (受 NILM_V14_PHYSICS_FEATURES / NILM_V14_ENABLE 开关控制)
+    _v14_enable = os.environ.get("NILM_V14_ENABLE", "").lower() in ("1", "true", "yes", "on")
+    _v14_physics = os.environ.get("NILM_V14_PHYSICS_FEATURES", "").lower()
+    if _v14_physics in ("1", "true", "yes", "on") or (_v14_enable and _v14_physics not in ("0", "false", "no", "off")):
+        _add_nilm_physics_features(X, df, top_cols)
 
     # --- (4) 时间特征 (含周期编码 + 季节) ---
     ts = df.index

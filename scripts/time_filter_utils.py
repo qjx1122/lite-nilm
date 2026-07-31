@@ -414,6 +414,18 @@ def get_user_common_overrides(config: dict, user_id: str) -> dict:
         "weather_longitude":     _v_float_range("weather_longitude", -180.0, 180.0),
         "use_weather_features":  _v_bool,
         "use_temp_based_season": _v_bool,
+        "v14_enable":            _v_bool,
+        "v14_enabled":           _v_bool,
+        "physics":               _v_bool,
+        "physics_features":      _v_bool,
+        "focal":                 _v_bool,
+        "ensemble":              _v_bool,
+        "calibrate":             _v_bool,
+        "auto_config":           _v_bool,
+        "health":                _v_bool,
+        "health_report":         _v_bool,
+        "diag":                  _v_bool,
+        "data_diag":             _v_bool,
     }
 
     def _extract_one(cfg, field, validator):
@@ -554,11 +566,13 @@ def get_user_guard_enabled(config: dict, user_id: str) -> Optional[bool]:
 
 
 def auto_detect_guard_enabled(
-    d87_abs_max_train: float,
+    d87_abs_max_train=None,
     threshold: float = 50.0,
     logger=None,
+    *args,
+    **kwargs,
 ) -> bool:
-    """[v13] 基于训练集 |d87| 极值自动判定守卫是否有效
+    """[v13/v14] 基于训练集 |d87| 极值自动判定守卫是否有效 (支持多种签名呼叫兼容)
 
     动机: 变频/小功率空调用户 (如 270708, 252842) d87 尖峰不足,
           守卫阈值会学得比全期 d87 max 还高, 造成 100% FN.
@@ -571,21 +585,65 @@ def auto_detect_guard_enabled(
     Returns:
         True  -> d87 尖峰足够强, 建议启用守卫
         False -> d87 尖峰不足, 建议禁用守卫 (启用会伤害推理)
-
-    经验数据 (硬证据支撑阈值 50W):
-      - 252844 (定频, 892W): |d87|_max ≈ 224 → auto: True ✓
-      - 270825 (定频, 858W): |d87|_max ≈ 200 → auto: True ✓
-      - 270848 (定频, 137W): |d87|_max ≈ 106 → auto: True ✓
-      - 252842 (变频, 893W): |d87|_max ≈ 45  → auto: False (关掉后 F1 0.22→0.78)
-      - 270708 (变频, 235W): |d87|_max = 84  → auto: True (但仍卡边界, 建议手动关)
     """
-    result = float(d87_abs_max_train) >= threshold
+    val = d87_abs_max_train
+    if val is None:
+        val = kwargs.get("d87_max", kwargs.get("max_val", 0.0))
+    if hasattr(val, "abs"):
+        try:
+            val = val.abs().max()
+        except Exception:
+            val = 0.0
+    try:
+        val_float = float(val)
+    except (ValueError, TypeError):
+        val_float = 0.0
+    result = val_float >= threshold
     if logger is not None:
         logger.info(
-            f"  [v13 auto_detect_guard] 训练集 |d87|.max={d87_abs_max_train:.1f}W "
+            f"  [v13/v14 auto_detect_guard] 训练集 |d87|.max={val_float:.1f}W "
             f"vs 阈值={threshold:.1f}W -> guard_enabled={result}"
         )
     return result
+
+
+def get_user_v14_flags(user_id: str, config_path: str = None) -> dict:
+    """
+    [v14] 从 time_filters.json 获取用户的 v14 增强开关字典
+    优先读取 config[user_id]["v14"]，_default 兜底为全 False
+    """
+    default_flags = {
+        "v14_enable": False,
+        "physics": False,
+        "focal": False,
+        "ensemble": False,
+        "calibrate": False,
+        "auto_config": False,
+        "health": False,
+        "diag": False,
+    }
+    try:
+        cfg = load_time_filter_config(config_path) if config_path else load_time_filter_config()
+        user_cfg = cfg.get(str(user_id), {})
+        if not isinstance(user_cfg, dict):
+            return default_flags
+        v14_sub = user_cfg.get("v14", {})
+        if not isinstance(v14_sub, dict):
+            return default_flags
+        out = dict(default_flags)
+        for k in default_flags.keys():
+            if k in v14_sub:
+                out[k] = bool(v14_sub[k])
+        # 别名兼容
+        if "physics_features" in v14_sub and "physics" not in v14_sub:
+            out["physics"] = bool(v14_sub["physics_features"])
+        if "health_report" in v14_sub and "health" not in v14_sub:
+            out["health"] = bool(v14_sub["health_report"])
+        if "data_diag" in v14_sub and "diag" not in v14_sub:
+            out["diag"] = bool(v14_sub["data_diag"])
+        return out
+    except Exception:
+        return default_flags
 
 
 # ============================================================
