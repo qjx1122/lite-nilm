@@ -29,6 +29,7 @@
 
 ## 决策记录 / 踩坑
 - **⚠️ venv 不跨 session 持久**：bash 快照剔除 `.venv`，每个新 session 开头必须 `python3 -m venv .venv && pip install -r requirements.txt`（~25s）；需 lightgbm 时另装（~3s）
+- **⚠️ 本地 git 历史可能被重置到 base commit（dd5e87c）而工作区文件保留**：远端分支才是真相——开局先 `git fetch origin arena/019fb816-lite-nilm:refs/remotes/origin/arena/019fb816-lite-nilm` 对比 HEAD，若本地落后/分叉则 rebase 到远端再干活（session 2 已踩并修复：本地 commit 曾错挂 dd5e87c 上，rebase 到 86ce7ad 解决）
 - bundle.pkl 反序列化需 `sys.path.insert(0,"scripts")`（EnsembleClf 在 v14_enhancements 模块内）；本仓库 bundle 键为 `feat_cols/feat_names/clf/scaler/best_thr/...`
 - artifacts/models/logs 被 .gitignore 排除不入库（快照内仍保留在本地工作区），报告引用其相对路径与仓库惯例一致
 - U842 与上版对比必须**按 ≥2026-07-01 重切**（本次推理 n=2780=6月验证段1340+7月1440，上版表 3.1 仅 7 月；真值 kWh 138.6 两侧一致口径自洽）
