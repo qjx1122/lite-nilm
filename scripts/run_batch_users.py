@@ -931,7 +931,7 @@ def main():
                 print(f"  [v13.5] common 覆盖 {len(_common_overrides)} 项: "
                       f"{', '.join(f'{k}={v}' for k, v in _common_overrides.items())}")
             if not _v14_flags_str:
-                _v14_dict = get_user_v14_flags(u["folder_name"])
+                _v14_dict = get_user_v14_flags(time_filter_config, u["folder_name"])
                 if any(_v14_dict.values()):
                     import json as _json_batch
                     _v14_flags_str = _json_batch.dumps(_v14_dict, ensure_ascii=False)

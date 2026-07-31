@@ -607,10 +607,12 @@ def auto_detect_guard_enabled(
     return result
 
 
-def get_user_v14_flags(user_id: str, config_path: str = None) -> dict:
+def get_user_v14_flags(arg1, arg2=None) -> dict:
     """
-    [v14] 从 time_filters.json 获取用户的 v14 增强开关字典
-    优先读取 config[user_id]["v14"]，_default 兜底为全 False
+    [v14] 从 time_filters.json / config dictionary 获取用户的 v14 增强开关字典
+    兼容两种调用签名:
+      get_user_v14_flags(config_dict, user_id) -- 类似 get_user_common_overrides
+      get_user_v14_flags(user_id, config_path=None)
     """
     default_flags = {
         "v14_enable": False,
@@ -623,7 +625,16 @@ def get_user_v14_flags(user_id: str, config_path: str = None) -> dict:
         "diag": False,
     }
     try:
-        cfg = load_time_filter_config(config_path) if config_path else load_time_filter_config()
+        if isinstance(arg1, dict):
+            cfg = arg1
+            user_id = str(arg2)
+        elif arg2 is not None and isinstance(arg2, dict):
+            cfg = arg2
+            user_id = str(arg1)
+        else:
+            user_id = str(arg1)
+            config_path = arg2 or "data/time_filters.json"
+            cfg = load_time_filter_config(config_path)
         user_cfg = cfg.get(str(user_id), {})
         if not isinstance(user_cfg, dict):
             return default_flags
@@ -634,7 +645,6 @@ def get_user_v14_flags(user_id: str, config_path: str = None) -> dict:
         for k in default_flags.keys():
             if k in v14_sub:
                 out[k] = bool(v14_sub[k])
-        # 别名兼容
         if "physics_features" in v14_sub and "physics" not in v14_sub:
             out["physics"] = bool(v14_sub["physics_features"])
         if "health_report" in v14_sub and "health" not in v14_sub:
