@@ -35,6 +35,28 @@ except Exception:
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
+def _purge_common_pyc():
+    """[v14.6] 删除 common.*.pyc 编译缓存.
+
+    背景 (2026-08-03 实证): CPython 校验 .pyc 仅比较 (source mtime 秒级, source
+    size)。patch/restore 对 TARGET_COL 的改写是同尺寸编辑; run_user_pipeline
+    main() 在 patch_common 之前会先 `from common import ON_THR_W` (无
+    --common-overrides 的用户必经), 若该 import 与本函数写入落在同一秒,
+    .pyc 即被误判有效, 子进程 (02_align_and_feat.py 等) 将读取**陈旧**的
+    TARGET_COL —— 曾导致 U2844 (target_col=p2) 的 04:14 批跑实际按 p1 产出
+    训练/推理指标 (峰值 892W/零样本 72.3% 指纹 = p1, p2 应为 899W/77.2%)。
+    删除 pyc 后, 任何新子进程必然从磁盘重新编译, 杜绝该 TOCTOU 窗口。
+    """
+    pyc_dir = Path(__file__).resolve().parent / "__pycache__"
+    if not pyc_dir.is_dir():
+        return
+    for pyc in pyc_dir.glob("common.*.pyc"):
+        try:
+            pyc.unlink()
+        except OSError:
+            pass
+
+
 def patch_common(target_col: str):
     """临时修改 common.py 的 TARGET_COL (备份原文件)"""
     common_path = Path(__file__).resolve().parent / "common.py"
@@ -50,6 +72,7 @@ def patch_common(target_col: str):
         content, count=1
     )
     common_path.write_text(new_content, encoding="utf-8")
+    _purge_common_pyc()   # [v14.6] 同秒同尺寸改写防陈旧 pyc (见函数 docstring)
     print(f"  [patch] TARGET_COL -> '{target_col}'")
 
 
@@ -59,6 +82,7 @@ def restore_common():
     if backup_path.exists():
         shutil.copy(backup_path, common_path)
         backup_path.unlink()
+        _purge_common_pyc()   # [v14.6] 同上: 恢复写入也必须失效旧 pyc
         print(f"  [restore] common.py 已恢复")
 
 

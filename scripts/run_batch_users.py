@@ -924,6 +924,11 @@ def main():
         _common_overrides_str = ""   # [v13.5] 8 项 common 常量覆盖
         _v14_flags_str = getattr(args, "v14_flags", "")   # [v14] v14 增强开关
         _bus_guard_json = ""  # [v14.1] 总线一致性守卫
+        # [v14.6] 提前初始化: 修复未传 --time-filter-config 时的 UnboundLocalError
+        _power_temp_calib_json = ""  # [v14.2] 推理端功率温桶标定
+        _time_prior_json = ""        # [v14.2] 推理端时段先验抑制
+        _exclude_features = ""       # [v14.3] 训练端特征黑名单
+        _calib_stats_json = ""       # [v14.4] 解耦统计窗
         if time_filter_config:
             from time_filter_utils import (get_user_stage_spec, spec_to_cli_arg,
                                             spec_summary, get_user_guard_enabled,
@@ -985,10 +990,7 @@ def main():
                     _bus_guard_json = _json_batch.dumps({"enabled": True}, ensure_ascii=False)
                     print(f"  [v14.1] bus_guard_enabled=true")
             # [v14.2] power_temp_calib / time_prior 用户级配置 (推理端可选标定)
-            _power_temp_calib_json = ""
-            _time_prior_json = ""
-            _exclude_features = ""  # [v14.3] 训练端特征黑名单
-            _calib_stats_json = ""  # [v14.4] 解耦统计窗
+            # (变量已在 time_filter_config 分支外初始化, 见 [v14.6])
             if isinstance(_ucfg, dict):
                 import json as _json_batch2
                 _pc = _ucfg.get("power_temp_calib")

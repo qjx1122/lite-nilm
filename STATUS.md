@@ -7,6 +7,7 @@
 - 已完成（2026-07-31 session 2）：**5 用户 v14 批量重跑 + 与上版对比 + 逐用户逐日问题详析** → 交付 `V14_RERUN_ANALYSIS.md`
 - 已完成（2026-07-31/08-01 session 3）：**P0–P2 整改路线图执行 + 全量重验** → 交付 `V14_REMEDIATION_REPORT.md`
 - 已完成（2026-08-01 session 4）：**推理集扩充 6 月训练窗外 OOD 验证 + 逐日详析 + 共性梳理** → 交付 `V14_JUNE_EXT_ANALYSIS.md`
+- 已完成（2026-08-03 session 5）：**5 用户逐日训练+推理评估指标 × 数据质量合并视图 + 逐用户详析** → 交付 `V14_TRAIN_INFER_DAILY_ANALYSIS.md` + `artifacts/daily_train_infer_metrics_view.md`；途中破获 **v14.6 陈旧 pyc 竞态事故**（见下）
 - 下一会话：待指派（候选：P-CE1 泛化守卫 / P-CE5 guard 滑窗锚 / P-CE6 日报 coverage 列 / 8 月数据回流）
 
 ## 已完成
@@ -37,6 +38,14 @@
 - [x] **P-CE5 查实**: bus_guard pwr_scale 全窗池化, June 入窗后 0.953→1.000, U2844 7月 SAE 8.3→13.2% (7/5 反改善 48%→17.4%)
 - [x] 交付 `V14_JUNE_EXT_ANALYSIS.md` (口径声明/回归闸/5用户逐日表/P-CE1~CE8 共性+修复路径)
 
+## 已完成（session 5 合并视图 + pyc 事故破获）
+- [x] **v14.6 陈旧 pyc 竞态破获（重大）**：04:14 批跑 U2844 指标异常（7月 kWh_true 138.56 vs 锚 84.16）一度误判为"分路标签数据版本翻转"；逐层硬证（原始 CSV 四列逐日核算 → 锚点=**p2 列指纹** 84.16/6.05/2.47/5.62 全等 → 配置 `target_col=p2` → 批日志对齐段统计 峰值892W/零样本72.3% = **p1 指纹**（p2 应为 899W/77.2%））坐实为 **CPython .pyc 校验只看 (mtime 秒, size)**：run_user_pipeline.main() 在 patch_common 前先 `from common import ON_THR_W`（无 --common-overrides 用户必经），同秒同尺寸改写 common.py 致 02 子进程吃陈旧 pyc。U842(p1→p1 无害)、U0778/U0789/U0800(有 overrides 或尺寸变更多幸免) 逐一对号入座。**无任何数据文件翻转**。
+- [x] **修复**：`patch_common`/`restore_common` 写入后 `_purge_common_pyc()` 删 `__pycache__/common.*.pyc`；另修 run_batch_users 未传 `--time-filter-config` 时 `_power_temp_calib_json` 的 UnboundLocalError（变量初始化前置）
+- [x] **回归测试**：`scripts/test_patch_common_pyc_fix.py` 9 断言全过（含同秒碰撞构造复现：修复前子进程读 p1/修复后读 p2）
+- [x] **修复后全量复跑**（475.2s 5/5 ok）：U2844 7月 kWh_true=84.16、7/5=6.045、F1=0.9721 全归锚；5/5 用户与 v14.3 终验链逐位一致 → **既有 V14 三份报告数字无需勘误**（它们本就走 p2/正确链）
+- [x] **主交付**：5 用户 train/val/test + 推理(6月扩段+7月) 逐日合并视图生成器 `scripts/build_daily_train_infer_view.py`（SAE 比率口径修正 + 满采/缺口质量卡）；`V14_TRAIN_INFER_DAILY_ANALYSIS.md` 逐用户详析（训练侧/推理6月/推理7月分段 + 数据质量交叉 + 共性 CE1+/CE3+/NEW-Q1~Q4）
+- [x] **新证据链**：口径错位 FP 训练侧首发（U2844 val 6/4 FP12、test 5/22 FP6 ↔ 推理 6/28 FP38）；训练侧 SAE 离群日=推理档位失败前哨（U842 6/2→7/1-4；U0789 5/28→7/13-15）；U2844 8 个"全零无信息日"需单独归类；训练标签结构（无 OFF 日×3 用户/U0800 仅 6 天）决定推理失败模式
+
 ## 进行中
 - （无）
 
@@ -56,12 +65,16 @@
 - **分路/总线 CSV 名易混**：总线 = `e241_...-Ch1-...csv`（event_time + load_iden_data*），分路 = `<meter_id>-...csv`（time + p1..p4）；对齐后分路列重命名 `y_ac`
 - **resample_and_align keep_cols=None 可能出 0 行**（全 load_iden 列含全 NaN 列时），训推一致必须用 bundle feat_cols
 - artifacts/models/logs 被 .gitignore 排除不入库（快照内仍保留在本地工作区），报告引用其相对路径与仓库惯例一致
+- **⚠️ 批跑必须带 `--time-filter-config data/time_filters.json`**：不带则 per-user target_col/过滤全失效且（v14.6 前）直接 UnboundLocalError；target_col 唯一真源是该配置的 `target_col`（U842=p1, U2844=p2, U0778=p2, U0789=p1+p2, U0800=p1）
+- **⚠️ 陈旧 pyc 竞态（v14.6 已修）**：同秒同尺寸改写 scripts/common.py 会让 02/03/04/05/06 子进程吃到旧 TARGET_COL 的 .pyc；事故指纹 = 批日志对齐段「峰值/零样本占比」与配置列不符；修复 = `run_user_pipeline._purge_common_pyc()`（patch/restore 后删除 common.*.pyc）+ `test_patch_common_pyc_fix.py` 兜底
+- U842 与 U2844 共用分路表 4206894986488（两拷贝 md5 不同但重叠日一致）：U842 用 p1、U2844 用 p2；U2844 文件 6/19-6/23 斜杠日期、p1 在 6/20/6/22 与 2025-07 全段为 NaN
 - U842 与上版对比必须**按 ≥2026-07-01 重切**（本次推理 n=2780=6月验证段1340+7月1440，上版表 3.1 仅 7 月；真值 kWh 138.6 两侧一致口径自洽）
 - U842 7/6 排查路径：排除数据事故（原始 d73/分路/气象缓存正常）→ p_on 崩塌在分类层 → 168 维全维扫描定位天气族 → 湿度 Middling 陷阱（ON 窗湿度 93 vs 日均 88；日均口径否决"湿度独因"假设，转向温差/cooling_degree 联合签名）→ 6/21 同签名复现确认 P8
 - 5σ 异常/focal gamma 测试设计踩坑记录见 git log（session 1 commit）
 
 ## 关键文件路径
-- `STATUS.md` — 本文件 | `V14_JUNE_EXT_ANALYSIS.md` — **最新主交付**（6 月扩段 OOD+共性梳理）
+- `STATUS.md` — 本文件 | `V14_TRAIN_INFER_DAILY_ANALYSIS.md` — **最新主交付**（训练+推理逐日×数据质量详析）| `artifacts/daily_train_infer_metrics_view.md` — 全量逐日合并视图 | `scripts/build_daily_train_infer_view.py` — 视图生成器 | `scripts/test_patch_common_pyc_fix.py` — pyc 竞态回归
+- `V14_JUNE_EXT_ANALYSIS.md` — 6 月扩段 OOD+共性梳理
 - `V14_REMEDIATION_REPORT.md` — P0-P2 整改验证 | `V14_RERUN_ANALYSIS.md` — v14 基线对比+逐日详析+路线图 | `V14_BATCH_COMPARISON.md` / `V14_DAILY_METRICS_ANALYSIS.md` — 上版对比基线
 - `data/time_filters.json` — 5 用户最终配置（U2844 bus_guard+direction=both；3 用户 power_temp_calib+calib_stats_include）
 - `scripts/power_temp_calib.py` — 温桶标定/时段先验（含 direction=both cap=p90 对称模式）
