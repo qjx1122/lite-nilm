@@ -85,6 +85,18 @@ class P2ModeModelParams:
 
 
 @dataclass
+class P2LossAwareModeParams:
+    mode_thresholds_w: List[float]
+    feature_cols: List[str]
+    mode_counts: Dict[str, int]
+    selected_candidate: Dict[str, float]
+    objective_weights: Dict[str, float]
+    train_val_objective: Dict[str, float]
+    candidate_count: int
+    note: str
+
+
+@dataclass
 class P3Params:
     temp_bins: List[float]
     rh_bins: List[float]
@@ -373,8 +385,10 @@ def _p2_mode_feature_cols() -> List[str]:
 
 def _ensure_p2_mode_features(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
+    if "hour" not in out.columns:
+        out["hour"] = out["time"].dt.hour + out["time"].dt.minute / 60.0
     if "hour_sin" not in out.columns:
-        hour = out["time"].dt.hour + out["time"].dt.minute / 60.0
+        hour = out["hour"]
         out["hour_sin"] = np.sin(2.0 * np.pi * hour / 24.0)
         out["hour_cos"] = np.cos(2.0 * np.pi * hour / 24.0)
         out["dow"] = out["time"].dt.dayofweek.astype(float)
@@ -469,6 +483,310 @@ def _apply_p2_mode_model(df: pd.DataFrame, mode_clf, regs: Dict[int, object]) ->
         y_pred[on] = np.clip(pred_on, 0, None)
     out["state_pred_variant"] = state
     out["y_pred_variant"] = y_pred
+    return out
+
+
+def _p2_enhanced_feature_cols() -> List[str]:
+    base = _p2_mode_feature_cols()
+    extra = [
+        # 日内分段模式: 用 baseline 已识别 ON 点的早/中/晚功率形态区分低功率长时与高功率长时
+        "day_pred_on_mean_morning", "day_pred_on_mean_midday", "day_pred_on_mean_evening",
+        "day_pred_kwh_morning", "day_pred_kwh_midday", "day_pred_kwh_evening",
+        "day_p_on_ge_02", "day_p_on_ge_05", "day_p_on_ge_10", "day_p_on_ge_30",
+        "day_p_on_ge_45", "day_p_on_ge_57",
+        # 连续 ON 段形态: P2 与 P1 分开, 只利用 baseline state/pred/proba, 不改 state
+        "seg_len", "seg_pos_frac", "seg_elapsed_h", "seg_remaining_h",
+        "seg_pred_mean", "seg_pred_std", "seg_pred_min", "seg_pred_max",
+        "seg_p_on_mean", "seg_p_on_min", "seg_p_on_q25", "seg_p_on_q50", "seg_p_on_q75",
+        "seg_start_hour", "seg_end_hour",
+        # 局部滚动与相对量纲
+        "p_on_roll4_mean", "p_on_roll8_mean", "pred_roll4_mean", "pred_roll8_mean",
+        "pred_to_day_mean", "pred_to_seg_mean", "pred_interval_width",
+        "pred_interval_ratio", "pred_low_ratio", "pred_high_ratio",
+    ]
+    return base + [c for c in extra if c not in base]
+
+
+def _ensure_p2_enhanced_features(df: pd.DataFrame) -> pd.DataFrame:
+    """增加 P2 mode 判别特征；只由 baseline 预测/时间/天气构造, 不用 OOD 标签。"""
+    out = _ensure_p2_mode_features(df).sort_values(["stage", "date", "time"]).copy()
+
+    # 日内分段统计
+    daily_rows = []
+    for (stage, date), g in out.groupby(["stage", "date"]):
+        row = {"stage": stage, "date": date}
+        for name, h0, h1 in [
+            ("morning", 9, 12), ("midday", 12, 17), ("evening", 17, 22),
+        ]:
+            m = (g["time"].dt.hour >= h0) & (g["time"].dt.hour < h1)
+            po = m & (g["state_pred_main"].astype(int) == 1)
+            row[f"day_pred_on_mean_{name}"] = float(g.loc[po, "y_pred_W_main"].mean()) if po.any() else 0.0
+            row[f"day_pred_kwh_{name}"] = float(g.loc[m, "y_pred_W_main"].sum() * DT_HOURS / 1000.0)
+        for thr in [0.02, 0.05, 0.10, 0.30, 0.45, 0.57]:
+            key = str(thr).replace("0.", "")
+            row[f"day_p_on_ge_{key}"] = int((g["p_on_main"] >= thr).sum())
+        daily_rows.append(row)
+    add_daily = pd.DataFrame(daily_rows)
+    drop_cols = [c for c in add_daily.columns if c not in ("stage", "date") and c in out.columns]
+    if drop_cols:
+        out = out.drop(columns=drop_cols)
+    out = out.merge(add_daily, on=["stage", "date"], how="left")
+
+    # 连续 baseline predicted-ON 段特征 + 分日 rolling
+    seg_cols = [
+        "seg_len", "seg_pos_frac", "seg_elapsed_h", "seg_remaining_h",
+        "seg_pred_mean", "seg_pred_std", "seg_pred_min", "seg_pred_max",
+        "seg_p_on_mean", "seg_p_on_min", "seg_p_on_q25", "seg_p_on_q50", "seg_p_on_q75",
+        "seg_start_hour", "seg_end_hour",
+        "p_on_roll4_mean", "p_on_roll8_mean", "pred_roll4_mean", "pred_roll8_mean",
+    ]
+    for c in seg_cols:
+        out[c] = 0.0
+    for _, idx in out.groupby(["stage", "date"]).indices.items():
+        ii = np.asarray(idx)
+        g = out.iloc[ii]
+        # rolling 不依赖 state, 分日防止跨日泄漏
+        out.iloc[ii, out.columns.get_loc("p_on_roll4_mean")] = g["p_on_main"].rolling(4, min_periods=1).mean().values
+        out.iloc[ii, out.columns.get_loc("p_on_roll8_mean")] = g["p_on_main"].rolling(8, min_periods=1).mean().values
+        out.iloc[ii, out.columns.get_loc("pred_roll4_mean")] = g["y_pred_W_main"].rolling(4, min_periods=1).mean().values
+        out.iloc[ii, out.columns.get_loc("pred_roll8_mean")] = g["y_pred_W_main"].rolling(8, min_periods=1).mean().values
+
+        st = g["state_pred_main"].astype(int).values
+        n = len(st)
+        pos = 0
+        while pos < n:
+            if st[pos] != 1:
+                pos += 1
+                continue
+            end = pos
+            while end < n and st[end] == 1:
+                end += 1
+            loc = ii[pos:end]
+            sg = out.iloc[loc]
+            L = len(loc)
+            pvals = sg["p_on_main"].astype(float)
+            yvals = sg["y_pred_W_main"].astype(float)
+            out.iloc[loc, out.columns.get_loc("seg_len")] = float(L)
+            out.iloc[loc, out.columns.get_loc("seg_pos_frac")] = (np.arange(L) + 1) / max(L, 1)
+            out.iloc[loc, out.columns.get_loc("seg_elapsed_h")] = np.arange(L) * DT_HOURS
+            out.iloc[loc, out.columns.get_loc("seg_remaining_h")] = (L - 1 - np.arange(L)) * DT_HOURS
+            out.iloc[loc, out.columns.get_loc("seg_pred_mean")] = float(yvals.mean())
+            out.iloc[loc, out.columns.get_loc("seg_pred_std")] = float(yvals.std(ddof=0))
+            out.iloc[loc, out.columns.get_loc("seg_pred_min")] = float(yvals.min())
+            out.iloc[loc, out.columns.get_loc("seg_pred_max")] = float(yvals.max())
+            out.iloc[loc, out.columns.get_loc("seg_p_on_mean")] = float(pvals.mean())
+            out.iloc[loc, out.columns.get_loc("seg_p_on_min")] = float(pvals.min())
+            out.iloc[loc, out.columns.get_loc("seg_p_on_q25")] = float(pvals.quantile(0.25))
+            out.iloc[loc, out.columns.get_loc("seg_p_on_q50")] = float(pvals.quantile(0.50))
+            out.iloc[loc, out.columns.get_loc("seg_p_on_q75")] = float(pvals.quantile(0.75))
+            out.iloc[loc, out.columns.get_loc("seg_start_hour")] = float(sg["hour"].iloc[0])
+            out.iloc[loc, out.columns.get_loc("seg_end_hour")] = float(sg["hour"].iloc[-1] + DT_HOURS)
+            pos = end
+
+    # 相对量纲与预测区间宽度
+    eps = 1e-6
+    out["pred_to_day_mean"] = out["y_pred_W_main"] / np.maximum(out["day_pred_on_mean"], eps)
+    out["pred_to_seg_mean"] = out["y_pred_W_main"] / np.maximum(out["seg_pred_mean"], eps)
+    out["pred_interval_width"] = (out["y_pred_high_W_main"] - out["y_pred_low_W_main"]).clip(lower=0)
+    out["pred_interval_ratio"] = out["pred_interval_width"] / np.maximum(out["y_pred_W_main"], eps)
+    out["pred_low_ratio"] = out["y_pred_low_W_main"] / np.maximum(out["y_pred_W_main"], eps)
+    out["pred_high_ratio"] = out["y_pred_high_W_main"] / np.maximum(out["y_pred_W_main"], eps)
+
+    for c in _p2_enhanced_feature_cols():
+        if c not in out.columns:
+            out[c] = 0.0
+        out[c] = out[c].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    return out
+
+
+def _p2_daily_loss_objective(df_variant: pd.DataFrame, variant: str,
+                             weights: Dict[str, float],
+                             stages: Tuple[str, ...] = ("train", "val")) -> Dict[str, float]:
+    if set(stages) == {"train", "val"}:
+        summary = [r for r in _summarize(df_variant, variant) if r["stage"] == "train_val"][0]
+    else:
+        gsum = df_variant[df_variant["stage"].isin(stages)]
+        cls = _classification_metrics(gsum["state_true"].astype(int).values,
+                                      gsum["state_pred_variant"].astype(int).values,
+                                      gsum["p_on_main"].astype(float).values)
+        reg = _regression_metrics(gsum["y_true_W"].astype(float).values,
+                                  gsum["y_pred_variant"].astype(float).values)
+        summary = {"stage": "+".join(stages), **cls, **reg}
+    daily = _daily_metrics(df_variant, variant)
+    tv = daily[daily["stage"].isin(stages)]
+    on = tv[tv["kWh_true"] > 0.01].copy()
+    mean_daily_sae = float(on["SAE"].mean()) if len(on) else 0.0
+    bad_rate = float((on["SAE"] > 0.2).mean()) if len(on) else 0.0
+    p95_daily_sae = float(on["SAE"].quantile(0.95)) if len(on) else 0.0
+    objective = (
+        weights["point_mae"] * float(summary["MAE_W"]) +
+        weights["overall_sae"] * float(summary["SAE"]) +
+        weights["mean_daily_sae"] * mean_daily_sae +
+        weights["p95_daily_sae"] * p95_daily_sae +
+        weights["bad_day_rate"] * bad_rate
+    )
+    return {
+        "objective": float(objective),
+        "point_mae_w": float(summary["MAE_W"]),
+        "overall_sae": float(summary["SAE"]),
+        "mean_daily_sae": mean_daily_sae,
+        "p95_daily_sae": p95_daily_sae,
+        "bad_day_rate": bad_rate,
+    }
+
+
+def _fit_apply_p2_lossaware_candidate(df: pd.DataFrame, candidate: Dict[str, float],
+                                      feat_cols: List[str], q1: float, q2: float,
+                                      train_stages: Tuple[str, ...] = ("train", "val")):
+    xdf = _ensure_p2_enhanced_features(df)
+    train_mask = xdf["stage"].isin(train_stages) & (xdf["state_true"].astype(int) == 1)
+
+    def _mode(y):
+        y = np.asarray(y, dtype=float)
+        return np.where(y <= q1, 0, np.where(y <= q2, 1, 2)).astype(int)
+
+    # 日级 sample weight: 用 train+val baseline 日级 SAE 构造, 不看 test/inference。
+    base_daily = _daily_metrics(_with_baseline_cols(xdf), "baseline")
+    btv = base_daily[base_daily["stage"].isin(train_stages)]
+    day_sae = dict(zip(btv["date"], btv["SAE"].fillna(0.0)))
+    alpha = float(candidate["daily_sae_weight"])
+    beta = float(candidate["bad_day_weight"])
+    sw = []
+    for d in xdf.loc[train_mask, "date"]:
+        s = float(day_sae.get(d, 0.0))
+        sw.append(1.0 + alpha * min(s, 1.0) + beta * float(s > 0.2))
+    sw = np.asarray(sw, dtype=float)
+
+    X = xdf.loc[train_mask, feat_cols].values.astype(float)
+    y_true = xdf.loc[train_mask, "y_true_W"].values.astype(float)
+    y_mode = _mode(y_true)
+    clf = RandomForestClassifier(
+        n_estimators=int(candidate["n_estimators"]),
+        max_depth=int(candidate["clf_max_depth"]),
+        min_samples_leaf=int(candidate["clf_min_leaf"]),
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=1,
+    )
+    clf.fit(X, y_mode, sample_weight=sw)
+    regs: Dict[int, object] = {}
+    counts: Dict[str, int] = {}
+    for m in [0, 1, 2]:
+        mm = y_mode == m
+        counts[str(m)] = int(mm.sum())
+        reg = RandomForestRegressor(
+            n_estimators=int(candidate["n_estimators"]),
+            max_depth=int(candidate["reg_max_depth"]),
+            min_samples_leaf=int(candidate["reg_min_leaf"]),
+            random_state=42,
+            n_jobs=1,
+        )
+        reg.fit(X[mm], y_true[mm], sample_weight=sw[mm])
+        regs[m] = reg
+
+    out = _ensure_p2_enhanced_features(df)
+    state = out["state_pred_main"].astype(int).values
+    pred = np.zeros(len(out), dtype=float)
+    on = state == 1
+    if on.any():
+        X_on = out.loc[on, feat_cols].values.astype(float)
+        modes = clf.predict(X_on)
+        pred_on = np.zeros(on.sum(), dtype=float)
+        for m in [0, 1, 2]:
+            sel = modes == m
+            if sel.any():
+                pred_on[sel] = regs[m].predict(X_on[sel])
+        blend = float(candidate["blend"])
+        base_on = out.loc[on, "y_pred_W_main"].values.astype(float)
+        pred[on] = blend * np.clip(pred_on, 0, None) + (1.0 - blend) * base_on
+    out["state_pred_variant"] = state
+    out["y_pred_variant"] = pred
+    return out, clf, regs, counts
+
+
+def _fit_p2_lossaware_mode_model(df: pd.DataFrame) -> Tuple[P2LossAwareModeParams, object, Dict[int, object]]:
+    xdf = _ensure_p2_enhanced_features(df)
+    feat_cols = _p2_enhanced_feature_cols()
+    train_mask = xdf["stage"].isin(["train", "val"]) & (xdf["state_true"].astype(int) == 1)
+    q1, q2 = xdf.loc[train_mask, "y_true_W"].quantile([1/3, 2/3]).values.astype(float)
+    weights = {
+        # W 与比例混合, 固定于实验脚本；只在 train+val 上比较候选。
+        "point_mae": 1.0,
+        "overall_sae": 80.0,
+        "mean_daily_sae": 40.0,
+        "p95_daily_sae": 25.0,
+        "bad_day_rate": 200.0,
+    }
+    candidates = []
+    for n_est in [160, 240]:
+        for clf_depth, reg_depth, clf_leaf, reg_leaf in [
+            (5, 6, 12, 10), (6, 8, 10, 8), (8, 10, 6, 6),
+        ]:
+            for alpha, beta in [(0.0, 0.0), (2.0, 4.0), (5.0, 10.0)]:
+                for blend in [1.0, 0.85, 0.70]:
+                    candidates.append({
+                        "n_estimators": float(n_est),
+                        "clf_max_depth": float(clf_depth),
+                        "reg_max_depth": float(reg_depth),
+                        "clf_min_leaf": float(clf_leaf),
+                        "reg_min_leaf": float(reg_leaf),
+                        "daily_sae_weight": float(alpha),
+                        "bad_day_weight": float(beta),
+                        "blend": float(blend),
+                    })
+    best = None
+    # 候选选择: 只用 train 训练、val 日级 loss-aware 目标选型，避免同集过拟合。
+    for cand in candidates:
+        applied_val_model, _clf_tmp, _regs_tmp, _counts_tmp = _fit_apply_p2_lossaware_candidate(
+            df, cand, feat_cols, q1, q2, train_stages=("train",)
+        )
+        obj_val = _p2_daily_loss_objective(applied_val_model, "p2_lossaware", weights, stages=("val",))
+        key = (obj_val["objective"], obj_val["bad_day_rate"], obj_val["p95_daily_sae"], obj_val["point_mae_w"])
+        if best is None or key < best[0]:
+            best = (key, cand, obj_val)
+    assert best is not None
+    _, selected, obj_val = best
+    # 最终模型: 用已选候选在 train+val 上重训，再用于 test/inference 验证。
+    applied_final, clf, regs, counts = _fit_apply_p2_lossaware_candidate(
+        df, selected, feat_cols, q1, q2, train_stages=("train", "val")
+    )
+    obj_train_val = _p2_daily_loss_objective(applied_final, "p2_lossaware", weights, stages=("train", "val"))
+    obj = dict(obj_train_val)
+    obj["selection_val_objective"] = obj_val
+    params = P2LossAwareModeParams(
+        mode_thresholds_w=[float(q1), float(q2)],
+        feature_cols=feat_cols,
+        mode_counts=counts,
+        selected_candidate={k: float(v) for k, v in selected.items()},
+        objective_weights=weights,
+        train_val_objective=obj,
+        candidate_count=len(candidates),
+        note=("loss-aware candidate selection uses train-only fit + val objective; final model retrained on train+val. "
+              "objective = point_MAE + daily/overall SAE + SAE>20 day penalty; P1 state guard not used"),
+    )
+    return params, clf, regs
+
+
+def _apply_p2_lossaware_mode_model(df: pd.DataFrame, params: P2LossAwareModeParams,
+                                   clf, regs: Dict[int, object]) -> pd.DataFrame:
+    out = _ensure_p2_enhanced_features(df)
+    feat_cols = params.feature_cols
+    state = out["state_pred_main"].astype(int).values
+    pred = np.zeros(len(out), dtype=float)
+    on = state == 1
+    if on.any():
+        X_on = out.loc[on, feat_cols].values.astype(float)
+        modes = clf.predict(X_on)
+        pred_on = np.zeros(on.sum(), dtype=float)
+        for m in [0, 1, 2]:
+            sel = modes == m
+            if sel.any():
+                pred_on[sel] = regs[m].predict(X_on[sel])
+        blend = float(params.selected_candidate.get("blend", 1.0))
+        base_on = out.loc[on, "y_pred_W_main"].values.astype(float)
+        pred[on] = blend * np.clip(pred_on, 0, None) + (1.0 - blend) * base_on
+    out["state_pred_variant"] = state
+    out["y_pred_variant"] = pred
     return out
 
 
@@ -573,6 +891,10 @@ def main():
     p2_mode, mode_clf, mode_regs = _fit_p2_mode_model(df)
     variants["P2_mode_classifier_regressor"] = _apply_p2_mode_model(df, mode_clf, mode_regs)
 
+    # 新版 P2: 增强模式特征 + train+val 日级 loss-aware 目标选择候选。
+    p2_loss, loss_clf, loss_regs = _fit_p2_lossaware_mode_model(df)
+    variants["P2_lossaware_mode_model"] = _apply_p2_lossaware_mode_model(df, p2_loss, loss_clf, loss_regs)
+
     # 旧版 simple daily scale 仅保留为对照，非本次建议方案。
     p2_daily = _fit_p2_params(df)
     variants["P2_daily_scale_ref"] = _apply_p2(df, p2_daily)
@@ -605,6 +927,7 @@ def main():
         "P1_recall_guard": asdict(p1),
         "P1_recall_guard_relaxed_ref": asdict(p1_relaxed),
         "P2_mode_classifier_regressor": asdict(p2_mode),
+        "P2_lossaware_mode_model": asdict(p2_loss),
         "P2_daily_scale_ref": asdict(p2_daily),
         "P3_temp_humidity_bucket": asdict(p3),
         "notes": {
