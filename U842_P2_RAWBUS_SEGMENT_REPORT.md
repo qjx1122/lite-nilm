@@ -1,5 +1,7 @@
 # U842 P2 原始总线/段级特征验证报告
 
+> 更新说明：后续已完成 `P2 rawbus + train/val-only 安全闸 + P1 recall guard` 组合灰度验证，详见 `U842_P2_RAWBUS_SAFETY_P1_REPORT.md`。本报告保留 rawbus 单方案证据。
+>
 > 用户要求：继续引入真正的原始总线/段级特征进行验证测试，而不仅是 baseline 预测派生特征。  
 > 实验脚本：`scripts/experiment_u842_p1_p2_p3.py`  
 > 产物目录：`artifacts/u842_p1_p2_p3_experiment/`  

@@ -115,6 +115,15 @@ class P2RawBusSegmentParams:
 
 
 @dataclass
+class P2RawBusSafetyParams:
+    safety_feature_cols: List[str]
+    threshold: float
+    classifier: str
+    train_val_label_counts: Dict[str, int]
+    note: str
+
+
+@dataclass
 class P3Params:
     temp_bins: List[float]
     rh_bins: List[float]
@@ -1046,6 +1055,145 @@ def _apply_p2_rawbus_segment_model(df: pd.DataFrame, params: P2RawBusSegmentPara
     return out
 
 
+def _p2_safety_feature_table(base_df: pd.DataFrame, rawbus_df: pd.DataFrame,
+                             raw_feature_df: pd.DataFrame) -> pd.DataFrame:
+    """日级安全闸特征表。
+
+    label 仅在 train+val 中使用: rawbus 日级绝对电量误差是否小于 baseline。
+    特征只来自 baseline/rawbus 预测、天气与 raw bus 统计，不使用 test/inference 标签。
+    """
+    rows = []
+    # rawbus_df 与 base_df 均应带 state_pred_variant/y_pred_variant
+    for (stage, date), gb0 in base_df.groupby(["stage", "date"]):
+        gb = gb0.reset_index(drop=True)
+        gr = rawbus_df[(rawbus_df["stage"] == stage) & (rawbus_df["date"] == date)].reset_index(drop=True)
+        gf = raw_feature_df[(raw_feature_df["stage"] == stage) & (raw_feature_df["date"] == date)].reset_index(drop=True)
+        if len(gr) != len(gb):
+            continue
+        pred_on = gb["state_pred_variant"].astype(int).values == 1
+        true_kwh = float(gb["y_true_W"].sum() * DT_HOURS / 1000.0)
+        base_kwh = float(gb["y_pred_variant"].sum() * DT_HOURS / 1000.0)
+        raw_kwh = float(gr["y_pred_variant"].sum() * DT_HOURS / 1000.0)
+        raw73 = "raw_load_iden_data73"
+        row = {
+            "stage": stage,
+            "date": date,
+            "true_kwh": true_kwh,
+            "base_kwh": base_kwh,
+            "rawbus_kwh": raw_kwh,
+            "abs_base_err": abs(base_kwh - true_kwh),
+            "abs_rawbus_err": abs(raw_kwh - true_kwh),
+            "rawbus_improves": int(abs(raw_kwh - true_kwh) < abs(base_kwh - true_kwh)),
+            "kwh_delta": raw_kwh - base_kwh,
+            "ratio_delta": (raw_kwh - base_kwh) / base_kwh if base_kwh > 1e-9 else 0.0,
+            "n_samples": int(len(gb)),
+            "coverage": float(len(gb) / 96.0),
+            "pred_on_n": int(pred_on.sum()),
+            "base_on_mean": float(gb.loc[pred_on, "y_pred_variant"].mean()) if pred_on.any() else 0.0,
+            "base_on_std": float(gb.loc[pred_on, "y_pred_variant"].std(ddof=0)) if pred_on.any() else 0.0,
+            "p_on_mean": float(gb["p_on_main"].mean()),
+            "p_on_q25": float(gb["p_on_main"].quantile(0.25)),
+            "p_on_q50": float(gb["p_on_main"].quantile(0.50)),
+            "p_on_q75": float(gb["p_on_main"].quantile(0.75)),
+            "rh_mean": float(gb["rh_mean"].iloc[0]) if "rh_mean" in gb else 0.0,
+            "temp_mean": float(gb["temp_mean"].iloc[0]) if "temp_mean" in gb else 0.0,
+        }
+        if raw73 in gf.columns:
+            row.update({
+                "raw73_day_mean": float(gf[raw73].mean()),
+                "raw73_day_std": float(gf[raw73].std(ddof=0)),
+                "raw73_on_mean": float(gf.loc[pred_on, raw73].mean()) if pred_on.any() else 0.0,
+                "raw73_on_std": float(gf.loc[pred_on, raw73].std(ddof=0)) if pred_on.any() else 0.0,
+            })
+        rows.append(row)
+    tab = pd.DataFrame(rows)
+    for c in tab.columns:
+        if c not in ("stage", "date"):
+            tab[c] = tab[c].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    return tab
+
+
+def _p2_safety_feature_cols(tab: pd.DataFrame) -> List[str]:
+    banned = {"stage", "date", "true_kwh", "abs_base_err", "abs_rawbus_err", "rawbus_improves"}
+    return [c for c in tab.columns if c not in banned]
+
+
+def _fit_p2_rawbus_safety_gate(base_df: pd.DataFrame, rawbus_df: pd.DataFrame,
+                               raw_feature_df: pd.DataFrame) -> Tuple[P2RawBusSafetyParams, object, pd.DataFrame]:
+    tab = _p2_safety_feature_table(base_df, rawbus_df, raw_feature_df)
+    feat_cols = _p2_safety_feature_cols(tab)
+    train = tab[tab["stage"].isin(["train", "val"]) & (tab["true_kwh"] > 0.01)].copy()
+    clf = RandomForestClassifier(
+        n_estimators=200, max_depth=4, min_samples_leaf=2,
+        class_weight="balanced", random_state=42, n_jobs=1,
+    )
+    clf.fit(train[feat_cols].values.astype(float), train["rawbus_improves"].astype(int).values)
+    counts = train["rawbus_improves"].value_counts().sort_index().to_dict()
+    params = P2RawBusSafetyParams(
+        safety_feature_cols=feat_cols,
+        threshold=0.50,
+        classifier="RandomForestClassifier(n_estimators=200,max_depth=4,min_samples_leaf=2,class_weight=balanced)",
+        train_val_label_counts={str(k): int(v) for k, v in counts.items()},
+        note=("Safety gate trained on train+val daily labels: use rawbus iff predicted P(rawbus improves) >= 0.50. "
+              "Features use prediction/weather/raw bus only; test/inference labels are not used."),
+    )
+    return params, clf, tab
+
+
+def _apply_p2_rawbus_safety_gate(base_df: pd.DataFrame, rawbus_df: pd.DataFrame,
+                                 safety_params: P2RawBusSafetyParams, safety_clf,
+                                 safety_tab: pd.DataFrame) -> pd.DataFrame:
+    out = base_df.copy()
+    out["state_pred_variant"] = out["state_pred_main"].astype(int)
+    out["y_pred_variant"] = out["y_pred_W_main"].astype(float)
+    feat_cols = safety_params.safety_feature_cols
+    probs = safety_clf.predict_proba(safety_tab[feat_cols].values.astype(float))[:, 1]
+    tab = safety_tab[["stage", "date"]].copy()
+    tab["safety_prob_rawbus_improves"] = probs
+    tab["safety_use_rawbus"] = (probs >= float(safety_params.threshold)).astype(int)
+    out = out.merge(tab, on=["stage", "date"], how="left", sort=False)
+    raw_lookup = rawbus_df[["stage", "time", "y_pred_variant"]].rename(
+        columns={"y_pred_variant": "rawbus_y_pred_variant"})
+    # rawbus_df 内部可能按 stage/time 重排，必须显式按 key 对齐，不能靠 values 顺序。
+    out = out.merge(raw_lookup, on=["stage", "time"], how="left", sort=False)
+    out["safety_prob_rawbus_improves"] = out["safety_prob_rawbus_improves"].fillna(0.0)
+    out["safety_use_rawbus"] = out["safety_use_rawbus"].fillna(0).astype(int)
+    out["rawbus_y_pred_variant"] = out["rawbus_y_pred_variant"].fillna(out["y_pred_variant"])
+    out["y_pred_variant"] = np.where(out["safety_use_rawbus"].values == 1,
+                                     out["rawbus_y_pred_variant"].values,
+                                     out["y_pred_variant"].values)
+    out = out.drop(columns=["rawbus_y_pred_variant"])
+    return out
+
+
+def _combine_p1_with_p2_power(p1_df: pd.DataFrame, p2_power_df: pd.DataFrame) -> pd.DataFrame:
+    """P1 负责 state 增量, P2 负责 baseline 已判 ON 点功率。
+
+    对 P1 新增 ON 点沿用 P1 guard_power；对 baseline 已判 ON 点使用 P2 power。
+    """
+    out = p1_df.copy()
+    p2_lookup_cols = ["stage", "time", "state_pred_main", "y_pred_variant"]
+    extra_cols = []
+    for c in ["safety_use_rawbus", "safety_prob_rawbus_improves"]:
+        if c in p2_power_df.columns:
+            extra_cols.append(c)
+    p2_lookup = p2_power_df[p2_lookup_cols + extra_cols].rename(
+        columns={"y_pred_variant": "p2_y_pred_variant",
+                 "state_pred_main": "p2_base_state"})
+    out = out.merge(p2_lookup, on=["stage", "time"], how="left", sort=False)
+    base_state = out["p2_base_state"].fillna(out["state_pred_main"]).astype(int).values
+    p1_state = out["state_pred_variant"].astype(int).values
+    p2_y = out["p2_y_pred_variant"].fillna(out["y_pred_W_main"]).astype(float).values
+    p1_y = out["y_pred_variant"].astype(float).values
+    y = np.where(base_state == 1, p2_y, 0.0)
+    newly_on = (p1_state == 1) & (base_state == 0)
+    y[newly_on] = p1_y[newly_on]
+    out["state_pred_variant"] = p1_state
+    out["y_pred_variant"] = y
+    out = out.drop(columns=["p2_base_state", "p2_y_pred_variant"])
+    return out
+
+
 def _fit_p3_params(df: pd.DataFrame) -> P3Params:
     tv = df[df["stage"].isin(["train", "val"])].copy()
     sel = ((tv["state_true"] == 1) & (tv["state_pred_main"] == 1) &
@@ -1155,6 +1303,18 @@ def main():
     p2_rawbus, rawbus_clf, rawbus_regs = _fit_p2_rawbus_segment_model(df)
     variants["P2_rawbus_segment_model"] = _apply_p2_rawbus_segment_model(df, p2_rawbus, rawbus_clf, rawbus_regs)
 
+    # 灰度候选: rawbus P2 + train/val-only 日级安全闸。
+    raw_feature_df = _ensure_p2_rawbus_segment_features(df)
+    p2_safety, safety_clf, safety_tab = _fit_p2_rawbus_safety_gate(
+        variants["baseline"], variants["P2_rawbus_segment_model"], raw_feature_df)
+    variants["P2_rawbus_safety_gate"] = _apply_p2_rawbus_safety_gate(
+        variants["baseline"], variants["P2_rawbus_segment_model"],
+        p2_safety, safety_clf, safety_tab)
+
+    # 组合灰度: P1 只负责补 state/FN, P2 rawbus+safety 只负责 baseline ON 功率。
+    variants["P1_plus_P2_rawbus_safety"] = _combine_p1_with_p2_power(
+        variants["P1_recall_guard"], variants["P2_rawbus_safety_gate"])
+
     # 旧版 simple daily scale 仅保留为对照，非本次建议方案。
     p2_daily = _fit_p2_params(df)
     variants["P2_daily_scale_ref"] = _apply_p2(df, p2_daily)
@@ -1189,6 +1349,7 @@ def main():
         "P2_mode_classifier_regressor": asdict(p2_mode),
         "P2_lossaware_mode_model": asdict(p2_loss),
         "P2_rawbus_segment_model": asdict(p2_rawbus),
+        "P2_rawbus_safety_gate": asdict(p2_safety),
         "P2_daily_scale_ref": asdict(p2_daily),
         "P3_temp_humidity_bucket": asdict(p3),
         "notes": {
