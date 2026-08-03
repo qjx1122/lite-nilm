@@ -130,11 +130,21 @@ class EnsembleClf:
         if use_lgb:
             try:
                 import lightgbm as lgbm
+                # [v14.7] 跨平台复现闸: LightGBM 多线程 histogram / OpenMP 在
+                # Windows/Linux 间不承诺 bitwise 一致。这里固定 deterministic + 单线程
+                # + col-wise, 尽量降低概率微漂移；阈值层另有 val-only 稳定化兜底。
                 self.lgb = lgbm.LGBMClassifier(
                     n_estimators=n_estimators, max_depth=max_depth,
                     learning_rate=lr, subsample=subsample,
                     random_state=random_state, verbose=-1,
-                    n_jobs=-1, **({"num_leaves": 31} if max_depth <= 0 else {}),
+                    n_jobs=1,
+                    deterministic=True,
+                    force_col_wise=True,
+                    feature_fraction_seed=random_state,
+                    bagging_seed=random_state,
+                    data_random_seed=random_state,
+                    extra_seed=random_state,
+                    **({"num_leaves": 31} if max_depth <= 0 else {}),
                 )
             except Exception as e:
                 logging.getLogger("nilm").warning(

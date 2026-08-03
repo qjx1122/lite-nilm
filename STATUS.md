@@ -9,6 +9,7 @@
 - 已完成（2026-08-01 session 4）：**推理集扩充 6 月训练窗外 OOD 验证 + 逐日详析 + 共性梳理** → 交付 `V14_JUNE_EXT_ANALYSIS.md`
 - 已完成（2026-08-03 session 5）：**5 用户逐日训练+推理评估指标 × 数据质量合并视图 + 逐用户详析** → 交付 `V14_TRAIN_INFER_DAILY_ANALYSIS.md` + `artifacts/daily_train_infer_metrics_view.md`；途中破获 **v14.6 陈旧 pyc 竞态事故**（见下）
 - 已完成（2026-08-03 session 5 续）：**5 用户汇总整体指标视图（分类×回归，训练×推理 micro-pooled）** → `scripts/build_overall_metrics_view.py` + `artifacts/overall_metrics_view.md`；池化口径与官方 `inference_metrics.csv` 逐位一致（Acc/F1 偏差 0.00000 交叉验证）；核心数字：分类 训练合并 F1=0.986 → 6月 0.744（P=0.625，FP=1646 虚块步）→ 7月 0.964；回归 训练 MAE 27.0W/SAE −3.8% → 6月 MAE 162.5W/+50.0% → 7月 124.1W/−15.1%
+- 已完成（2026-08-03 session 7）：**U842 Windows/沙盒 LightGBM active 但 best_thr=0.74 vs 0.57 跨平台差异定位 + v14.7 阈值稳定化修复** → `postprocess.search_best_threshold` val-only 近似同分容忍带 + Recall/Precision 定向 tie-break；LightGBM deterministic 单线程/col-wise；新增 `scripts/test_postprocess_threshold_stability.py`。
 - 下一会话：待指派（候选：P-CE1 泛化守卫 / P-CE5 guard 滑窗锚 / P-CE6 日报 coverage 列 / 8 月数据回流）
 
 ## 已完成
@@ -53,6 +54,14 @@
 - [x] 附注：截图 inference 行 status=`ok:main`（本地 `ok:main_final`）提示对方汇总组表器/代码版本亦偏旧；不影响根因判定
 - [x] 受控复现后已无损恢复：reinstall lightgbm + /tmp 备份还原 U842 artifacts/models，锚复核 7月 138.56/0.9322 [OK]
 
+## 已完成（session 7 U842 Windows/沙盒 best_thr 跨平台稳定化）
+- [x] **新证据修正**：用户 Windows 更新至 `95274bd` 后 `clf_class=EnsembleClf`、`ensemble_lgb_active=True`、`pickle_lgb_active=True`，但 `best_thr=0.74`；三重 hash 诊断显示关键数据/脚本均为 `[OK] EOL_ONLY_CRLF`，即语义内容与 HEAD 一致，raw hash 差异仅 Windows CRLF。故根因从"LightGBM 未激活"细化为：**同代码/数据下 Windows/Conda/LightGBM/OpenMP 概率微漂移触发 val 阈值阶梯函数跳档**。
+- [x] **直接量化**：沙盒 LightGBM active 链 `best_thr=0.57`；若仅把阈值抬到 0.74，U842 inference 从 `TN/FP/FN/TP=1354/23/202/1201, F1=0.9144, kWh_pred=192.09` 退化到约 `1364/13/416/987, F1≈0.821, kWh_pred≈158`，与用户 Windows `1364/13/421/982, F1=0.8190, kWh_pred=157.37` 对齐；推理集中 `0.57<=p_on<0.74` 约 220 点，其中真实 ON 约 211 点，是 OOD 放大器。
+- [x] **v14.7 修复**：`scripts/postprocess.py::search_best_threshold` 增加 val-only 稳定化：raw 最优 F_beta 下方 `tol=min(0.002,max(1e-4,2/n_val))` 视为有限验证集近似同分；`beta>=1` 在候选内优先 Recall、再 Precision、再低阈值，`beta<1` 维持 Precision 优先。该规则只依赖 val 样本数和 val 曲线，不读取推理集/7月标签，符合参数纪律。
+- [x] **复现闸**：`scripts/v14_enhancements.py::EnsembleClf` 的 LightGBM 改为 `n_jobs=1, deterministic=True, force_col_wise=True` 并固定 seed 族，降低 Windows/Linux histogram/OpenMP 非 bitwise 概率漂移；`03_train.py` 写入 `raw_best_thr/raw_best_fbeta/selected_fbeta/threshold_stability_tol/threshold_selection_policy` 与 `runtime_versions` 便于事后排查。
+- [x] **沙盒回归锚**：v14.7 后 U842 单用户强制重训 (`batch_run_20260803_104313`) 仍回到 `best_thr=0.57`、`ensemble_lgb_active=True`、inference `F1=0.9143509707 / Recall=0.8560228083 / kWh_pred=192.0877048`；新增 `threshold_curve_val.csv` 含 tn/fp/fn/tp 列，top plateau 0.57~0.62；`runtime_versions` 已写入 meta。
+- [x] **单测**：新增 `scripts/test_postprocess_threshold_stability.py`（10 断言）覆盖 raw 高阈值近似同分但 Recall 更高时选低阈值、关闭稳定化保留旧行为、beta<1 Precision 优先、完全平台阶取左端、元数据自洽。
+
 ## 进行中
 - （无）
 
@@ -74,6 +83,7 @@
 - artifacts/models/logs 被 .gitignore 排除不入库（快照内仍保留在本地工作区），报告引用其相对路径与仓库惯例一致
 - **⚠️ 批跑必须带 `--time-filter-config data/time_filters.json`**：不带则 per-user target_col/过滤全失效且（v14.6 前）直接 UnboundLocalError；target_col 唯一真源是该配置的 `target_col`（U842=p1, U2844=p2, U0778=p2, U0789=p1+p2, U0800=p1）
 - **⚠️ 陈旧 pyc 竞态（v14.6 已修）**：同秒同尺寸改写 scripts/common.py 会让 02/03/04/05/06 子进程吃到旧 TARGET_COL 的 .pyc；事故指纹 = 批日志对齐段「峰值/零样本占比」与配置列不符；修复 = `run_user_pipeline._purge_common_pyc()`（patch/restore 后删除 common.*.pyc）+ `test_patch_common_pyc_fix.py` 兜底
+- **⚠️ U842 阈值跳档（v14.7 已修）**：Windows raw hash 与沙盒不同先判 CRLF；若三重 hash 全 `[OK] EOL_ONLY_CRLF` 且 `ensemble_lgb_active=True`，重点查 `best_thr/raw_best_thr/threshold_selection_policy`。U842 0.74 高阈值会把 `0.57<=p_on<0.74` 的 200+ 推理 ON 点压成 FN；修复 = val-only 近似同分 Recall 优先 tie-break + LightGBM deterministic 单线程。
 - U842 与 U2844 共用分路表 4206894986488（两拷贝 md5 不同但重叠日一致）：U842 用 p1、U2844 用 p2；U2844 文件 6/19-6/23 斜杠日期、p1 在 6/20/6/22 与 2025-07 全段为 NaN
 - U842 与上版对比必须**按 ≥2026-07-01 重切**（本次推理 n=2780=6月验证段1340+7月1440，上版表 3.1 仅 7 月；真值 kWh 138.6 两侧一致口径自洽）
 - U842 7/6 排查路径：排除数据事故（原始 d73/分路/气象缓存正常）→ p_on 崩塌在分类层 → 168 维全维扫描定位天气族 → 湿度 Middling 陷阱（ON 窗湿度 93 vs 日均 88；日均口径否决"湿度独因"假设，转向温差/cooling_degree 联合签名）→ 6/21 同签名复现确认 P8

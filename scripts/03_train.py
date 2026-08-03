@@ -23,9 +23,11 @@ Step 3: 模型训练 v5 (温度特征 + 温度驱动季节路由)
 """
 import json
 import sys
+import platform
 import joblib
 import numpy as np
 import pandas as pd
+import sklearn
 from datetime import datetime
 
 from sklearn.ensemble import (GradientBoostingClassifier,
@@ -69,6 +71,28 @@ from metrics_utils import (compute_classification_metrics,
                            save_predictions_csv,
                            flatten_metrics_to_rows,
                            save_metrics_csv)
+
+
+def _collect_runtime_versions():
+    """[v14.7] 记录训练时依赖/平台版本, 便于排查跨平台非 bitwise 漂移。"""
+    versions = {
+        "python": sys.version.split()[0],
+        "python_executable": sys.executable,
+        "platform": platform.platform(),
+        "numpy": np.__version__,
+        "pandas": pd.__version__,
+        "sklearn": sklearn.__version__,
+        "joblib": joblib.__version__,
+    }
+    try:
+        import lightgbm as _lgb
+        versions["lightgbm"] = getattr(_lgb, "__version__", "unknown")
+        versions["lightgbm_file"] = getattr(_lgb, "__file__", "")
+    except Exception as e:
+        versions["lightgbm"] = None
+        versions["lightgbm_import_error"] = repr(e)
+    return versions
+
 
 log = get_logger("train")
 
@@ -479,8 +503,17 @@ def main():
             fill_short_off=POST_FILL_SHORT_OFF,
         )
         best_thr = result["best_thr"]
+        _selected_fbeta = result.get("selected_fbeta", result.get("best_fbeta"))
+        _raw_best_thr = result.get("raw_best_thr", best_thr)
+        _raw_best_fbeta = result.get("raw_best_fbeta", result.get("best_fbeta"))
+        _thr_tol = result.get("threshold_stability_tol", 0.0)
         log.info(f"  最佳阈值 = {best_thr:.3f}   "
-                 f"Val F{FBETA} = {result['best_fbeta']:.4f}")
+                 f"Val F{FBETA} = {_selected_fbeta:.4f}")
+        if _raw_best_thr != best_thr:
+            log.info(f"  [v14.7] 阈值稳定化: raw_thr={_raw_best_thr:.3f} "
+                     f"raw_F{FBETA}={_raw_best_fbeta:.4f}, "
+                     f"selected_thr={best_thr:.3f}, tol={_thr_tol:.6f}, "
+                     f"policy={result.get('threshold_selection_policy')}")
 
     # 保存阈值-指标曲线
     curve_df = pd.DataFrame(result["curve"])
@@ -1108,10 +1141,18 @@ def main():
         "feat_cols": top_cols,
         "feat_names": feat_names,
         "best_thr": best_thr,
+        # [v14.7] 阈值稳定化元数据: 只由 val 集阈值曲线推导, 便于跨平台复现排查
+        "raw_best_thr": result.get("raw_best_thr", best_thr),
+        "raw_best_fbeta": result.get("raw_best_fbeta", result.get("best_fbeta")),
+        "selected_fbeta": result.get("selected_fbeta", result.get("best_fbeta")),
+        "threshold_stability_tol": result.get("threshold_stability_tol", 0.0),
+        "threshold_candidate_count": result.get("threshold_candidate_count", 1),
+        "threshold_selection_policy": result.get("threshold_selection_policy", "raw_fbeta_argmax"),
         "ON_THR": ON_THR_W,                       # 兼容旧推理代码 (= ON_THR_TRAIN_W)
         "ON_THR_TRAIN": ON_THR_TRAIN_W,           # v6.13: 训练标签阈值
         "ON_THR_BUSINESS": ON_THR_BUSINESS_W,     # v6.13: 业务评估阈值
         "trained_at": ts_tag,
+        "runtime_versions": _collect_runtime_versions(),
         "n_train": int(len(y_tr)), "n_val": int(len(y_va)),
         # 版本与超参 (v6.10: version 字段从 common.PROJECT_VERSION 统一读取)
         "version": (f"v42_baseline_{PROJECT_VERSION}"
@@ -1242,6 +1283,11 @@ def main():
     log.info("-" * 70)
     log.info("保存评估指标")
     extra = {"threshold": best_thr,
+             "raw_best_thr": result.get("raw_best_thr", best_thr),
+             "selected_fbeta": result.get("selected_fbeta", result.get("best_fbeta")),
+             "raw_best_fbeta": result.get("raw_best_fbeta", result.get("best_fbeta")),
+             "threshold_stability_tol": result.get("threshold_stability_tol", 0.0),
+             "threshold_selection_policy": result.get("threshold_selection_policy", "raw_fbeta_argmax"),
              "fbeta": FBETA,
              "post_min_on": POST_MIN_ON,
              "post_fill_short_off": POST_FILL_SHORT_OFF}
