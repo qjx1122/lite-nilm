@@ -27,12 +27,16 @@ from __future__ import annotations
 
 import json
 import math
+import warnings
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
+import joblib
 import numpy as np
 import pandas as pd
+from pandas.errors import PerformanceWarning
+warnings.filterwarnings("ignore", category=PerformanceWarning)
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import (accuracy_score, confusion_matrix, f1_score,
                              mean_absolute_error, mean_squared_error,
@@ -93,6 +97,20 @@ class P2LossAwareModeParams:
     objective_weights: Dict[str, float]
     train_val_objective: Dict[str, float]
     candidate_count: int
+    note: str
+
+
+@dataclass
+class P2RawBusSegmentParams:
+    mode_thresholds_w: List[float]
+    raw_bus_cols: List[str]
+    feature_cols: List[str]
+    mode_counts: Dict[str, int]
+    selected_blend: float
+    candidate_blends: List[float]
+    train_val_objective: Dict[str, float]
+    classifier: str
+    regressor: str
     note: str
 
 
@@ -790,6 +808,244 @@ def _apply_p2_lossaware_mode_model(df: pd.DataFrame, params: P2LossAwareModePara
     return out
 
 
+def _load_raw_bus_resampled() -> Tuple[pd.DataFrame, List[str]]:
+    """加载 U842 原始总线并重采样到 15min。
+
+    只使用总线原始电参量与时间，不读取分路标签；用于 P2 功率模式识别。
+    """
+    paths = sorted((PROJECT_ROOT / "data/trains" / USER_ID).glob("e241_*.csv"))
+    paths += sorted((PROJECT_ROOT / "data/infers" / USER_ID).glob("e241_*.csv"))
+    if not paths:
+        raise FileNotFoundError(f"U842 raw bus csv not found under data/trains|infers/{USER_ID}")
+    frames = []
+    data_cols = None
+    for p in paths:
+        b = pd.read_csv(p, encoding="utf-8")
+        b["event_time"] = pd.to_datetime(b["event_time"], errors="coerce")
+        b = b.dropna(subset=["event_time"])
+        cols = [c for c in b.columns if c.startswith("load_iden_data")]
+        b[cols] = b[cols].replace(-2147483648, np.nan)
+        frames.append(b[["event_time"] + cols])
+        data_cols = cols if data_cols is None else sorted(set(data_cols) | set(cols))
+    bus = pd.concat(frames, ignore_index=True, sort=False).sort_values("event_time")
+    data_cols = [c for c in (data_cols or []) if c in bus.columns]
+    rs = (bus.set_index("event_time")[data_cols]
+          .resample("15min", label="left", closed="left").mean()
+          .ffill(limit=2).bfill(limit=2))
+    return rs, data_cols
+
+
+def _select_raw_bus_cols(raw_rs: pd.DataFrame, n_cols: int = 12) -> List[str]:
+    """优先取 bundle feat_cols 中存在的原始总线列, 回退到方差最大的列。"""
+    cols: List[str] = []
+    try:
+        bundle = joblib.load(PROJECT_ROOT / "models" / USER_ID / "nilm_ac_two_stage.pkl")
+        for c in bundle.get("feat_cols", []):
+            if c in raw_rs.columns and c not in cols:
+                cols.append(c)
+            if len(cols) >= n_cols:
+                return cols
+    except Exception:
+        pass
+    var_cols = raw_rs.var(numeric_only=True).sort_values(ascending=False).index.tolist()
+    for c in var_cols:
+        if c not in cols:
+            cols.append(c)
+        if len(cols) >= n_cols:
+            break
+    return cols
+
+
+def _ensure_p2_rawbus_segment_features(df: pd.DataFrame) -> pd.DataFrame:
+    """P2 原始总线/段级特征。
+
+    特征仅由 raw bus + baseline predicted state/proba/power + 时间/天气构造；
+    不使用 test/inference 标签。段级统计使用 baseline predicted-ON 段。
+    """
+    out = _ensure_p2_enhanced_features(df).copy()
+    raw_rs, _ = _load_raw_bus_resampled()
+    raw_cols = _select_raw_bus_cols(raw_rs, n_cols=12)
+    raw = raw_rs[raw_cols].copy()
+    raw.columns = [f"raw_{c}" for c in raw.columns]
+    # 点级原始总线动态特征: 前 6 个高相关/高重要列的 diff/rolling。
+    for c in raw_cols[:6]:
+        s = raw_rs[c]
+        raw[f"raw_{c}_d1"] = s.diff().fillna(0.0)
+        raw[f"raw_{c}_d4"] = s.diff(4).fillna(0.0)
+        raw[f"raw_{c}_roll4_mean"] = s.rolling(4, min_periods=1).mean()
+        raw[f"raw_{c}_roll4_std"] = s.rolling(4, min_periods=1).std().fillna(0.0)
+    raw = raw.reset_index().rename(columns={"event_time": "time"})
+    out = out.merge(raw, on="time", how="left")
+    raw_feature_cols = [c for c in out.columns if c.startswith("raw_load_iden_data")]
+    out = out.sort_values(["stage", "time"])
+    out[raw_feature_cols] = out[raw_feature_cols].ffill().bfill().fillna(0.0)
+
+    # 日级 raw bus 统计: 全日 + baseline predicted-ON 子集。
+    daily_rows = []
+    stat_cols = raw_feature_cols[:8]
+    for (stage, date), g in out.groupby(["stage", "date"]):
+        pred_on = g["state_pred_main"].astype(int) == 1
+        row = {"stage": stage, "date": date}
+        for c in stat_cols:
+            row[f"day_{c}_mean"] = float(g[c].mean())
+            row[f"day_{c}_std"] = float(g[c].std(ddof=0))
+            row[f"day_on_{c}_mean"] = float(g.loc[pred_on, c].mean()) if pred_on.any() else 0.0
+        daily_rows.append(row)
+    add = pd.DataFrame(daily_rows)
+    drop_cols = [c for c in add.columns if c not in ("stage", "date") and c in out.columns]
+    if drop_cols:
+        out = out.drop(columns=drop_cols)
+    out = out.merge(add, on=["stage", "date"], how="left")
+
+    # baseline predicted-ON 段内 raw bus 统计。
+    seg_cols = []
+    for c in stat_cols:
+        for suf in ["seg_mean", "seg_std", "seg_min", "seg_max", "seg_range", "to_seg_mean"]:
+            name = f"{c}_{suf}"
+            out[name] = 0.0
+            seg_cols.append(name)
+    for _, idx in out.groupby(["stage", "date"]).indices.items():
+        ii = np.asarray(idx)
+        g = out.iloc[ii]
+        st = g["state_pred_main"].astype(int).values
+        n = len(st)
+        pos = 0
+        while pos < n:
+            if st[pos] != 1:
+                pos += 1
+                continue
+            end = pos
+            while end < n and st[end] == 1:
+                end += 1
+            loc = ii[pos:end]
+            sg = out.iloc[loc]
+            for c in stat_cols:
+                vals = sg[c].astype(float)
+                mean = float(vals.mean())
+                std = float(vals.std(ddof=0))
+                mn = float(vals.min())
+                mx = float(vals.max())
+                out.iloc[loc, out.columns.get_loc(f"{c}_seg_mean")] = mean
+                out.iloc[loc, out.columns.get_loc(f"{c}_seg_std")] = std
+                out.iloc[loc, out.columns.get_loc(f"{c}_seg_min")] = mn
+                out.iloc[loc, out.columns.get_loc(f"{c}_seg_max")] = mx
+                out.iloc[loc, out.columns.get_loc(f"{c}_seg_range")] = mx - mn
+                out.iloc[loc, out.columns.get_loc(f"{c}_to_seg_mean")] = vals.values / (abs(mean) + 1e-6)
+            pos = end
+
+    for c in _p2_rawbus_feature_cols(out):
+        out[c] = out[c].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    out.attrs["raw_bus_cols"] = raw_cols
+    return out
+
+
+def _p2_rawbus_feature_cols(df: pd.DataFrame) -> List[str]:
+    # raw-bus 方案刻意不使用大量 baseline 预测派生段级特征；只保留最小
+    # baseline/时间/天气上下文 + 真正原始总线/总线段级特征, 便于验证 raw bus 的增益。
+    base = [
+        "p_on_main", "y_pred_W_main", "y_pred_low_W_main", "y_pred_high_W_main",
+        "hour_sin", "hour_cos", "dow",
+        "temperature_2m", "apparent_temperature", "relative_humidity_2m",
+    ]
+    raw_cols = [c for c in df.columns
+                if c.startswith("raw_load_iden_data")
+                or c.startswith("day_raw_load_iden_data")
+                or ("raw_load_iden_data" in c and "seg_" in c)]
+    return base + [c for c in raw_cols if c not in base]
+
+
+def _fit_p2_rawbus_segment_model(df: pd.DataFrame) -> Tuple[P2RawBusSegmentParams, object, Dict[int, object]]:
+    xdf = _ensure_p2_rawbus_segment_features(df)
+    feat_cols = _p2_rawbus_feature_cols(xdf)
+    raw_bus_cols = list(xdf.attrs.get("raw_bus_cols", []))
+    train_mask = xdf["stage"].isin(["train", "val"]) & (xdf["state_true"].astype(int) == 1)
+    q1, q2 = xdf.loc[train_mask, "y_true_W"].quantile([1/3, 2/3]).values.astype(float)
+
+    def _mode(y):
+        y = np.asarray(y, dtype=float)
+        return np.where(y <= q1, 0, np.where(y <= q2, 1, 2)).astype(int)
+
+    X = xdf.loc[train_mask, feat_cols].values.astype(float)
+    y_true = xdf.loc[train_mask, "y_true_W"].values.astype(float)
+    y_mode = _mode(y_true)
+    clf = RandomForestClassifier(
+        n_estimators=240, max_depth=8, min_samples_leaf=6,
+        class_weight="balanced", random_state=42, n_jobs=1,
+    )
+    clf.fit(X, y_mode)
+    regs: Dict[int, object] = {}
+    counts: Dict[str, int] = {}
+    for m in [0, 1, 2]:
+        mm = y_mode == m
+        counts[str(m)] = int(mm.sum())
+        reg = RandomForestRegressor(
+            n_estimators=240, max_depth=10, min_samples_leaf=6,
+            random_state=42, n_jobs=1,
+        )
+        reg.fit(X[mm], y_true[mm])
+        regs[m] = reg
+
+    # blend 也仅按 train+val objective 选择；通常 raw bus 模型 blend=1 最优。
+    blends = [1.0, 0.85, 0.70, 0.50, 0.30]
+    weights = {"point_mae": 1.0, "overall_sae": 80.0,
+               "mean_daily_sae": 40.0, "p95_daily_sae": 25.0,
+               "bad_day_rate": 200.0}
+    best = None
+    for blend in blends:
+        tmp_params = P2RawBusSegmentParams(
+            mode_thresholds_w=[float(q1), float(q2)], raw_bus_cols=raw_bus_cols,
+            feature_cols=feat_cols, mode_counts=counts, selected_blend=blend,
+            candidate_blends=blends, train_val_objective={},
+            classifier="RandomForestClassifier(n_estimators=240,max_depth=8,min_samples_leaf=6,class_weight=balanced)",
+            regressor="RandomForestRegressor(n_estimators=240,max_depth=10,min_samples_leaf=6)",
+            note="temporary for blend selection",
+        )
+        applied = _apply_p2_rawbus_segment_model(df, tmp_params, clf, regs)
+        obj = _p2_daily_loss_objective(applied, "p2_rawbus", weights, stages=("train", "val"))
+        key = (obj["objective"], obj["bad_day_rate"], obj["p95_daily_sae"], obj["point_mae_w"])
+        if best is None or key < best[0]:
+            best = (key, blend, obj)
+    assert best is not None
+    _, selected_blend, obj = best
+    params = P2RawBusSegmentParams(
+        mode_thresholds_w=[float(q1), float(q2)],
+        raw_bus_cols=raw_bus_cols,
+        feature_cols=feat_cols,
+        mode_counts=counts,
+        selected_blend=float(selected_blend),
+        candidate_blends=[float(x) for x in blends],
+        train_val_objective=obj,
+        classifier="RandomForestClassifier(n_estimators=240,max_depth=8,min_samples_leaf=6,class_weight=balanced)",
+        regressor="RandomForestRegressor(n_estimators=240,max_depth=10,min_samples_leaf=6)",
+        note=("P2 raw-bus/segment model; features use raw bus resampled to 15min + baseline predicted-ON segment stats. "
+              "P1 state guard not used; test/inference labels not used for params."),
+    )
+    return params, clf, regs
+
+
+def _apply_p2_rawbus_segment_model(df: pd.DataFrame, params: P2RawBusSegmentParams,
+                                   clf, regs: Dict[int, object]) -> pd.DataFrame:
+    out = _ensure_p2_rawbus_segment_features(df)
+    feat_cols = params.feature_cols
+    state = out["state_pred_main"].astype(int).values
+    pred = np.zeros(len(out), dtype=float)
+    on = state == 1
+    if on.any():
+        X_on = out.loc[on, feat_cols].values.astype(float)
+        modes = clf.predict(X_on)
+        pred_on = np.zeros(on.sum(), dtype=float)
+        for m in [0, 1, 2]:
+            sel = modes == m
+            if sel.any():
+                pred_on[sel] = regs[m].predict(X_on[sel])
+        base_on = out.loc[on, "y_pred_W_main"].values.astype(float)
+        blend = float(params.selected_blend)
+        pred[on] = blend * np.clip(pred_on, 0, None) + (1.0 - blend) * base_on
+    out["state_pred_variant"] = state
+    out["y_pred_variant"] = pred
+    return out
+
+
 def _fit_p3_params(df: pd.DataFrame) -> P3Params:
     tv = df[df["stage"].isin(["train", "val"])].copy()
     sel = ((tv["state_true"] == 1) & (tv["state_pred_main"] == 1) &
@@ -895,6 +1151,10 @@ def main():
     p2_loss, loss_clf, loss_regs = _fit_p2_lossaware_mode_model(df)
     variants["P2_lossaware_mode_model"] = _apply_p2_lossaware_mode_model(df, p2_loss, loss_clf, loss_regs)
 
+    # 最新 P2: 引入真正原始总线/段级特征, 不再只依赖 baseline 预测派生特征。
+    p2_rawbus, rawbus_clf, rawbus_regs = _fit_p2_rawbus_segment_model(df)
+    variants["P2_rawbus_segment_model"] = _apply_p2_rawbus_segment_model(df, p2_rawbus, rawbus_clf, rawbus_regs)
+
     # 旧版 simple daily scale 仅保留为对照，非本次建议方案。
     p2_daily = _fit_p2_params(df)
     variants["P2_daily_scale_ref"] = _apply_p2(df, p2_daily)
@@ -928,6 +1188,7 @@ def main():
         "P1_recall_guard_relaxed_ref": asdict(p1_relaxed),
         "P2_mode_classifier_regressor": asdict(p2_mode),
         "P2_lossaware_mode_model": asdict(p2_loss),
+        "P2_rawbus_segment_model": asdict(p2_rawbus),
         "P2_daily_scale_ref": asdict(p2_daily),
         "P3_temp_humidity_bucket": asdict(p3),
         "notes": {

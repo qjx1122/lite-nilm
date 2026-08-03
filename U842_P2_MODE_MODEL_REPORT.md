@@ -1,6 +1,6 @@
 # U842 P2 重做：mode_classifier + per-mode regressor 验证报告
 
-> 更新说明：本报告为普通 P2 mode model 的验证；后续已进一步验证日级 loss-aware + 增强模式特征，详见 `U842_P2_LOSSAWARE_MODE_REPORT.md`。生产判断以最新 loss-aware 报告中的“拒绝上线”结论和普通 mode model 对照为准。
+> 更新说明：本报告为普通 P2 mode model 的验证；后续已进一步验证日级 loss-aware + 增强模式特征（`U842_P2_LOSSAWARE_MODE_REPORT.md`）以及真正 raw bus/segment 特征（`U842_P2_RAWBUS_SEGMENT_REPORT.md`）。当前 P2 最佳候选以 rawbus 报告为准。
 >
 > 目标：按用户要求重做 P2，不再使用 simple daily scale，改为 `mode_classifier + per-mode regressor`，并重新验证 test / inference 效果。  
 > 实验脚本：`scripts/experiment_u842_p1_p2_p3.py`  

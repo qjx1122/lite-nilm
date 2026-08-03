@@ -1,5 +1,7 @@
 # U842 P2 日级 loss-aware mode model 验证报告
 
+> 更新说明：后续已按用户要求加入真正 raw bus/segment 特征并验证成功，详见 `U842_P2_RAWBUS_SEGMENT_REPORT.md`。本报告保留 loss-aware 版本失败证据。
+>
 > 用户要求：  
 > 1. 给 P2 加入日级 loss-aware 训练目标；  
 > 2. 增加模式判别特征；  
