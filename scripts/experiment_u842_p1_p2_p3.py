@@ -67,6 +67,23 @@ class P1Params:
 
 
 @dataclass
+class P1LowProbRainParams:
+    low_rh_min: float
+    low_temp_max: float
+    low_p_ge02_min: int
+    low_raw73_core_min: float
+    low_power_w: float
+    warm_rh_min: float
+    warm_temp_min: float
+    warm_p_ge02_min: int
+    warm_raw73_core_min: float
+    warm_power_w: float
+    hour_start: float
+    hour_end: float
+    note: str
+
+
+@dataclass
 class P2Params:
     n_bins: int
     min_days_per_bin: int
@@ -120,6 +137,18 @@ class P2RawBusSafetyParams:
     threshold: float
     classifier: str
     train_val_label_counts: Dict[str, int]
+    note: str
+
+
+@dataclass
+class P2ExtraRiskGateParams:
+    coverage_min: float
+    apply_coverage_only_if_rawbus_up: bool
+    risk_p_q50_lo: float
+    risk_p_q50_hi: float
+    risk_rh_max: float
+    risk_pred_on_n_min: int
+    risk_base_on_mean_min: float
     note: str
 
 
@@ -291,6 +320,76 @@ def _apply_p1(df: pd.DataFrame, params: P1Params) -> pd.DataFrame:
     out["state_pred_variant"] = state
     out["y_pred_variant"] = y_pred * state
     out["p1_newly_on"] = newly_on.astype(int)
+    return out
+
+
+def _fit_p1_lowprob_rain_params(df: pd.DataFrame) -> P1LowProbRainParams:
+    """低概率梅雨 guard 参数。
+
+    功率锚点来自 train+val ON 功率分位；触发阈值是基于 train+val 高湿
+    no-positive day 防误杀检查后固定的诊断候选，不使用 test/inference 标签。
+    """
+    tv_on = df[df["stage"].isin(["train", "val"]) & (df["state_true"].astype(int) == 1)]
+    low_power = float(tv_on["y_true_W"].quantile(0.01))
+    warm_power = float(tv_on["y_true_W"].median())
+    return P1LowProbRainParams(
+        low_rh_min=80.0,
+        low_temp_max=22.0,
+        low_p_ge02_min=20,
+        low_raw73_core_min=1800.0,
+        low_power_w=low_power,
+        warm_rh_min=85.0,
+        warm_temp_min=25.0,
+        warm_p_ge02_min=35,
+        warm_raw73_core_min=2300.0,
+        warm_power_w=warm_power,
+        hour_start=9.25,
+        hour_end=22.0,
+        note=("Train/val-only diagnostic low-prob rain guard. Trigger only when baseline has no ON; "
+              "low-temp branch uses train+val ON p01 power, warm-rain branch uses train+val ON median power."),
+    )
+
+
+def _apply_p1_lowprob_rain_guard(df: pd.DataFrame, p1_df: pd.DataFrame,
+                                 raw_feature_df: pd.DataFrame,
+                                 params: P1LowProbRainParams) -> pd.DataFrame:
+    """在既有 P1 recall guard 基础上, 对低概率梅雨整日漏检进行 day-level 补点。"""
+    out = p1_df.copy()
+    raw73 = "raw_load_iden_data73"
+    # key 对齐, 不靠 values 顺序。
+    out = out.sort_values(["stage", "time"]).copy()
+    for (stage, date), idx in out.groupby(["stage", "date"]).indices.items():
+        ii = np.asarray(idx)
+        g = out.iloc[ii]
+        gf = raw_feature_df[(raw_feature_df["stage"] == stage) &
+                            (raw_feature_df["date"] == date)].reset_index(drop=True)
+        if len(gf) != len(g):
+            continue
+        base_pred_on_n = int(g["state_pred_main"].astype(int).sum())
+        if base_pred_on_n != 0:
+            continue
+        hour = g["time"].dt.hour + g["time"].dt.minute / 60.0
+        core = (hour >= params.hour_start) & (hour < params.hour_end)
+        if core.sum() == 0:
+            continue
+        p_ge02 = int((g.loc[core, "p_on_main"] >= 0.02).sum())
+        rh = float(g["rh_mean"].iloc[0])
+        temp = float(g["temp_mean"].iloc[0])
+        raw73_core = float(gf.loc[core.values, raw73].mean()) if raw73 in gf.columns else 0.0
+        low_trigger = (
+            rh >= params.low_rh_min and temp <= params.low_temp_max and
+            p_ge02 >= params.low_p_ge02_min and raw73_core >= params.low_raw73_core_min
+        )
+        warm_trigger = (
+            rh >= params.warm_rh_min and temp >= params.warm_temp_min and
+            p_ge02 >= params.warm_p_ge02_min and raw73_core >= params.warm_raw73_core_min
+        )
+        if not (low_trigger or warm_trigger):
+            continue
+        power = params.low_power_w if low_trigger else params.warm_power_w
+        loc = ii[core.values]
+        out.iloc[loc, out.columns.get_loc("state_pred_variant")] = 1
+        out.iloc[loc, out.columns.get_loc("y_pred_variant")] = power
     return out
 
 
@@ -1166,6 +1265,70 @@ def _apply_p2_rawbus_safety_gate(base_df: pd.DataFrame, rawbus_df: pd.DataFrame,
     return out
 
 
+def _fit_p2_extra_risk_gate_params() -> P2ExtraRiskGateParams:
+    return P2ExtraRiskGateParams(
+        coverage_min=0.90,
+        apply_coverage_only_if_rawbus_up=True,
+        risk_p_q50_lo=0.45,
+        risk_p_q50_hi=0.60,
+        risk_rh_max=85.0,
+        risk_pred_on_n_min=40,
+        risk_base_on_mean_min=0.0,
+        note=("Diagnostic train/val-constrained risk gate: partial-day coverage fallback plus "
+              "low/mid p_on long-ON rawbus-up fallback. Thresholds use no test/inference labels; "
+              "validated as a candidate, not final production rule."),
+    )
+
+
+def _apply_p2_extra_risk_gate(base_df: pd.DataFrame, rawbus_df: pd.DataFrame,
+                              safety_df: pd.DataFrame,
+                              safety_tab: pd.DataFrame,
+                              params: P2ExtraRiskGateParams) -> pd.DataFrame:
+    """在 P2 rawbus safety gate 之上增加 coverage 与低功率长时风险回退。"""
+    out = safety_df.copy()
+    tab = safety_tab[["stage", "date", "base_kwh", "rawbus_kwh", "coverage",
+                      "p_on_q50", "rh_mean", "pred_on_n", "base_on_mean"]].copy()
+    tab = tab.rename(columns={
+        "base_kwh": "risk_base_kwh", "rawbus_kwh": "risk_rawbus_kwh",
+        "coverage": "risk_coverage", "p_on_q50": "risk_p_on_q50",
+        "rh_mean": "risk_rh_mean", "pred_on_n": "risk_pred_on_n",
+        "base_on_mean": "risk_base_on_mean",
+    })
+    # safety_df 已有 safety_use_rawbus；按 date/stage 附加 daily risk 特征。
+    out = out.merge(tab, on=["stage", "date"], how="left", sort=False)
+    use = out["safety_use_rawbus"].fillna(0).astype(int).values == 1
+    raw_up = out["risk_rawbus_kwh"].fillna(0).values > out["risk_base_kwh"].fillna(0).values
+    cov_risk = (out["risk_coverage"].fillna(1.0).values < params.coverage_min)
+    if params.apply_coverage_only_if_rawbus_up:
+        cov_risk = cov_risk & raw_up
+    low_power_risk = (
+        raw_up &
+        (out["risk_p_on_q50"].fillna(0).values >= params.risk_p_q50_lo) &
+        (out["risk_p_on_q50"].fillna(0).values <= params.risk_p_q50_hi) &
+        (out["risk_rh_mean"].fillna(0).values <= params.risk_rh_max) &
+        (out["risk_pred_on_n"].fillna(0).values >= params.risk_pred_on_n_min) &
+        (out["risk_base_on_mean"].fillna(0).values >= params.risk_base_on_mean_min)
+    )
+    fallback = cov_risk | low_power_risk
+    use2 = use & (~fallback)
+    # 需要 baseline 与 rawbus 点级功率重新对齐。
+    base_lookup = base_df[["stage", "time", "y_pred_W_main"]].rename(columns={"y_pred_W_main": "base_y"})
+    raw_lookup = rawbus_df[["stage", "time", "y_pred_variant"]].rename(columns={"y_pred_variant": "raw_y"})
+    out = out.merge(base_lookup, on=["stage", "time"], how="left", sort=False)
+    out = out.merge(raw_lookup, on=["stage", "time"], how="left", sort=False)
+    out["extra_gate_coverage_fallback"] = cov_risk.astype(int)
+    out["extra_gate_lowpower_fallback"] = low_power_risk.astype(int)
+    out["safety_use_rawbus"] = use2.astype(int)
+    out["y_pred_variant"] = np.where(use2, out["raw_y"].fillna(0).values,
+                                     out["base_y"].fillna(0).values)
+    drop_cols = [c for c in ["risk_base_kwh", "risk_rawbus_kwh", "risk_coverage", "risk_p_on_q50",
+                             "risk_rh_mean", "risk_pred_on_n", "risk_base_on_mean",
+                             "base_y", "raw_y"]
+                 if c in out.columns]
+    out = out.drop(columns=drop_cols)
+    return out
+
+
 def _combine_p1_with_p2_power(p1_df: pd.DataFrame, p2_power_df: pd.DataFrame) -> pd.DataFrame:
     """P1 负责 state 增量, P2 负责 baseline 已判 ON 点功率。
 
@@ -1292,6 +1455,12 @@ def main():
     p1_relaxed = _select_p1_params(df, strict_daily_gate=False)
     variants["P1_recall_guard_relaxed_ref"] = _apply_p1(df, p1_relaxed)
 
+    # 低概率梅雨整日漏检 guard: 仍与 P2 分离, 只改 state/新增 ON 点。
+    raw_feature_for_p1 = _ensure_p2_rawbus_segment_features(df)
+    p1_lowprob = _fit_p1_lowprob_rain_params(df)
+    variants["P1_lowprob_rain_guard"] = _apply_p1_lowprob_rain_guard(
+        df, variants["P1_recall_guard"], raw_feature_for_p1, p1_lowprob)
+
     p2_mode, mode_clf, mode_regs = _fit_p2_mode_model(df)
     variants["P2_mode_classifier_regressor"] = _apply_p2_mode_model(df, mode_clf, mode_regs)
 
@@ -1311,9 +1480,17 @@ def main():
         variants["baseline"], variants["P2_rawbus_segment_model"],
         p2_safety, safety_clf, safety_tab)
 
+    # 追加风险闸: partial-day coverage fallback + 低功率长时 rawbus-up fallback。
+    p2_extra_risk = _fit_p2_extra_risk_gate_params()
+    variants["P2_rawbus_safety_cov_lowrisk"] = _apply_p2_extra_risk_gate(
+        variants["baseline"], variants["P2_rawbus_segment_model"],
+        variants["P2_rawbus_safety_gate"], safety_tab, p2_extra_risk)
+
     # 组合灰度: P1 只负责补 state/FN, P2 rawbus+safety 只负责 baseline ON 功率。
     variants["P1_plus_P2_rawbus_safety"] = _combine_p1_with_p2_power(
         variants["P1_recall_guard"], variants["P2_rawbus_safety_gate"])
+    variants["P1_lowprob_plus_P2_risk"] = _combine_p1_with_p2_power(
+        variants["P1_lowprob_rain_guard"], variants["P2_rawbus_safety_cov_lowrisk"])
 
     # 旧版 simple daily scale 仅保留为对照，非本次建议方案。
     p2_daily = _fit_p2_params(df)
@@ -1346,10 +1523,12 @@ def main():
     params = {
         "P1_recall_guard": asdict(p1),
         "P1_recall_guard_relaxed_ref": asdict(p1_relaxed),
+        "P1_lowprob_rain_guard": asdict(p1_lowprob),
         "P2_mode_classifier_regressor": asdict(p2_mode),
         "P2_lossaware_mode_model": asdict(p2_loss),
         "P2_rawbus_segment_model": asdict(p2_rawbus),
         "P2_rawbus_safety_gate": asdict(p2_safety),
+        "P2_extra_risk_gate": asdict(p2_extra_risk),
         "P2_daily_scale_ref": asdict(p2_daily),
         "P3_temp_humidity_bucket": asdict(p3),
         "notes": {

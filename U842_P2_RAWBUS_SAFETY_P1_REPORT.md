@@ -1,5 +1,7 @@
 # U842 P2 rawbus + train/val-only 安全闸 + P1 recall guard 组合灰度验证报告
 
+> 更新说明：后续已完成低功率长时风险闸、partial-day coverage 闸、P1低概率梅雨guard 组合验证，详见 `U842_P2_RISK_COVERAGE_P1_LOWPROB_REPORT.md`。本报告保留上一阶段安全闸+P1组合证据。
+>
 > 用户要求：继续完成 `P2 rawbus + train/val-only 安全闸 + P1 recall guard` 组合灰度验证。  
 > 实验脚本：`scripts/experiment_u842_p1_p2_p3.py`  
 > 产物目录：`artifacts/u842_p1_p2_p3_experiment/`  
