@@ -8,6 +8,7 @@
 - 已完成（2026-07-31/08-01 session 3）：**P0–P2 整改路线图执行 + 全量重验** → 交付 `V14_REMEDIATION_REPORT.md`
 - 已完成（2026-08-01 session 4）：**推理集扩充 6 月训练窗外 OOD 验证 + 逐日详析 + 共性梳理** → 交付 `V14_JUNE_EXT_ANALYSIS.md`
 - 已完成（2026-08-03 session 5）：**5 用户逐日训练+推理评估指标 × 数据质量合并视图 + 逐用户详析** → 交付 `V14_TRAIN_INFER_DAILY_ANALYSIS.md` + `artifacts/daily_train_infer_metrics_view.md`；途中破获 **v14.6 陈旧 pyc 竞态事故**（见下）
+- 已完成（2026-08-03 session 5 续）：**5 用户汇总整体指标视图（分类×回归，训练×推理 micro-pooled）** → `scripts/build_overall_metrics_view.py` + `artifacts/overall_metrics_view.md`；池化口径与官方 `inference_metrics.csv` 逐位一致（Acc/F1 偏差 0.00000 交叉验证）；核心数字：分类 训练合并 F1=0.986 → 6月 0.744（P=0.625，FP=1646 虚块步）→ 7月 0.964；回归 训练 MAE 27.0W/SAE −3.8% → 6月 MAE 162.5W/+50.0% → 7月 124.1W/−15.1%
 - 下一会话：待指派（候选：P-CE1 泛化守卫 / P-CE5 guard 滑窗锚 / P-CE6 日报 coverage 列 / 8 月数据回流）
 
 ## 已完成
