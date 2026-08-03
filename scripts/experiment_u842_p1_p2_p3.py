@@ -33,6 +33,7 @@ from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import (accuracy_score, confusion_matrix, f1_score,
                              mean_absolute_error, mean_squared_error,
                              precision_score, recall_score, roc_auc_score)
@@ -69,6 +70,18 @@ class P2Params:
     clip_hi: float
     bin_edges: List[float]
     bin_scales: Dict[str, float]
+
+
+@dataclass
+class P2ModeModelParams:
+    mode_thresholds_w: List[float]
+    feature_cols: List[str]
+    mode_counts: Dict[str, int]
+    classifier: str
+    regressor: str
+    random_state: int
+    n_estimators: int
+    note: str
 
 
 @dataclass
@@ -123,6 +136,8 @@ def _load_predictions() -> pd.DataFrame:
             "p_on": "p_on_main",
             "state_pred": "state_pred_main",
             "y_pred_W": "y_pred_W_main",
+            "y_pred_low_W": "y_pred_low_W_main",
+            "y_pred_high_W": "y_pred_high_W_main",
         })
         df["stage"] = stage
         frames.append(df)
@@ -131,8 +146,12 @@ def _load_predictions() -> pd.DataFrame:
     inf["stage"] = "inference"
     frames.append(inf)
     df = pd.concat(frames, ignore_index=True, sort=False)
+    for c in ["y_pred_low_W_main", "y_pred_high_W_main"]:
+        if c not in df.columns:
+            df[c] = np.nan
+        df[c] = df[c].fillna(df["y_pred_W_main"])
     keep = ["time", "stage", "y_true_W", "y_pred_W_main", "state_true",
-            "state_pred_main", "p_on_main"]
+            "state_pred_main", "p_on_main", "y_pred_low_W_main", "y_pred_high_W_main"]
     df = df[keep].copy()
     # baseline prediction CSV 已按当前 v14.7 best_thr/postprocess 输出; 但 P1 需可重算 raw。
     return df
@@ -341,6 +360,118 @@ def _apply_p2(df: pd.DataFrame, params: P2Params) -> pd.DataFrame:
     return out
 
 
+def _p2_mode_feature_cols() -> List[str]:
+    return [
+        "p_on_main", "y_pred_W_main", "y_pred_low_W_main", "y_pred_high_W_main",
+        "hour_sin", "hour_cos", "dow",
+        "temperature_2m", "apparent_temperature", "relative_humidity_2m",
+        "day_pred_on_n", "day_pred_on_mean", "day_pred_kwh",
+        "day_p_on_mean", "day_p_on_q25", "day_p_on_q50", "day_p_on_q75",
+        "temp_mean", "rh_mean",
+    ]
+
+
+def _ensure_p2_mode_features(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if "hour_sin" not in out.columns:
+        hour = out["time"].dt.hour + out["time"].dt.minute / 60.0
+        out["hour_sin"] = np.sin(2.0 * np.pi * hour / 24.0)
+        out["hour_cos"] = np.cos(2.0 * np.pi * hour / 24.0)
+        out["dow"] = out["time"].dt.dayofweek.astype(float)
+    daily_rows = []
+    for (stage, date), g in out.groupby(["stage", "date"]):
+        pred_on = g["state_pred_main"].astype(int) == 1
+        daily_rows.append({
+            "stage": stage,
+            "date": date,
+            "day_pred_on_n": int(pred_on.sum()),
+            "day_pred_on_mean": float(g.loc[pred_on, "y_pred_W_main"].mean()) if pred_on.any() else 0.0,
+            "day_pred_kwh": float(g["y_pred_W_main"].sum() * DT_HOURS / 1000.0),
+            "day_p_on_mean": float(g["p_on_main"].mean()),
+            "day_p_on_q25": float(g["p_on_main"].quantile(0.25)),
+            "day_p_on_q50": float(g["p_on_main"].quantile(0.50)),
+            "day_p_on_q75": float(g["p_on_main"].quantile(0.75)),
+        })
+    # 清理旧列避免重复 merge 产生 _x/_y。
+    drop_cols = [c for c in ["day_pred_on_n", "day_pred_on_mean", "day_pred_kwh",
+                             "day_p_on_mean", "day_p_on_q25", "day_p_on_q50", "day_p_on_q75"]
+                 if c in out.columns]
+    if drop_cols:
+        out = out.drop(columns=drop_cols)
+    out = out.merge(pd.DataFrame(daily_rows), on=["stage", "date"], how="left")
+    for c in _p2_mode_feature_cols():
+        if c not in out.columns:
+            out[c] = 0.0
+        out[c] = out[c].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    return out
+
+
+def _fit_p2_mode_model(df: pd.DataFrame) -> Tuple[P2ModeModelParams, object, Dict[int, object]]:
+    """训练真正的 mode_classifier + per-mode regressor。
+
+    mode label 由 train+val 真 ON 样本 y_true_W 的 1/3、2/3 分位数定义。
+    推理时只对 baseline 已判 ON 的点重估功率；分类 state 不变。
+    """
+    xdf = _ensure_p2_mode_features(df)
+    feat_cols = _p2_mode_feature_cols()
+    train_mask = xdf["stage"].isin(["train", "val"]) & (xdf["state_true"].astype(int) == 1)
+    q1, q2 = xdf.loc[train_mask, "y_true_W"].quantile([1/3, 2/3]).values.astype(float)
+
+    def _mode(y):
+        y = np.asarray(y, dtype=float)
+        return np.where(y <= q1, 0, np.where(y <= q2, 1, 2)).astype(int)
+
+    X = xdf.loc[train_mask, feat_cols].values.astype(float)
+    y_mode = _mode(xdf.loc[train_mask, "y_true_W"].values)
+    mode_clf = RandomForestClassifier(
+        n_estimators=200, max_depth=6, min_samples_leaf=10,
+        random_state=42, n_jobs=1, class_weight="balanced",
+    )
+    mode_clf.fit(X, y_mode)
+    regs: Dict[int, object] = {}
+    counts: Dict[str, int] = {}
+    for m in [0, 1, 2]:
+        mm = y_mode == m
+        counts[str(m)] = int(mm.sum())
+        reg = RandomForestRegressor(
+            n_estimators=200, max_depth=8, min_samples_leaf=8,
+            random_state=42, n_jobs=1,
+        )
+        reg.fit(X[mm], xdf.loc[train_mask, "y_true_W"].values[mm])
+        regs[m] = reg
+    params = P2ModeModelParams(
+        mode_thresholds_w=[float(q1), float(q2)],
+        feature_cols=feat_cols,
+        mode_counts=counts,
+        classifier="RandomForestClassifier(n_estimators=200,max_depth=6,min_samples_leaf=10,class_weight=balanced)",
+        regressor="RandomForestRegressor(n_estimators=200,max_depth=8,min_samples_leaf=8)",
+        random_state=42,
+        n_estimators=200,
+        note="mode labels from train+val true ON y_true_W tertiles; test/inference labels not used",
+    )
+    return params, mode_clf, regs
+
+
+def _apply_p2_mode_model(df: pd.DataFrame, mode_clf, regs: Dict[int, object]) -> pd.DataFrame:
+    out = _ensure_p2_mode_features(df)
+    feat_cols = _p2_mode_feature_cols()
+    state = out["state_pred_main"].astype(int).values
+    y_pred = np.zeros(len(out), dtype=float)
+    on = state == 1
+    if on.any():
+        X_on = out.loc[on, feat_cols].values.astype(float)
+        modes = mode_clf.predict(X_on)
+        pred_on = np.zeros(on.sum(), dtype=float)
+        for m in [0, 1, 2]:
+            sel = modes == m
+            if sel.any():
+                pred_on[sel] = regs[m].predict(X_on[sel])
+        y_pred[on] = np.clip(pred_on, 0, None)
+    out["state_pred_variant"] = state
+    out["y_pred_variant"] = y_pred
+    return out
+
+
 def _fit_p3_params(df: pd.DataFrame) -> P3Params:
     tv = df[df["stage"].isin(["train", "val"])].copy()
     sel = ((tv["state_true"] == 1) & (tv["state_pred_main"] == 1) &
@@ -439,8 +570,12 @@ def main():
     p1_relaxed = _select_p1_params(df, strict_daily_gate=False)
     variants["P1_recall_guard_relaxed_ref"] = _apply_p1(df, p1_relaxed)
 
-    p2 = _fit_p2_params(df)
-    variants["P2_power_mode"] = _apply_p2(df, p2)
+    p2_mode, mode_clf, mode_regs = _fit_p2_mode_model(df)
+    variants["P2_mode_classifier_regressor"] = _apply_p2_mode_model(df, mode_clf, mode_regs)
+
+    # 旧版 simple daily scale 仅保留为对照，非本次建议方案。
+    p2_daily = _fit_p2_params(df)
+    variants["P2_daily_scale_ref"] = _apply_p2(df, p2_daily)
 
     p3 = _fit_p3_params(df)
     variants["P3_temp_humidity_bucket"] = _apply_p3(df, p3)
@@ -469,7 +604,8 @@ def main():
     params = {
         "P1_recall_guard": asdict(p1),
         "P1_recall_guard_relaxed_ref": asdict(p1_relaxed),
-        "P2_power_mode": asdict(p2),
+        "P2_mode_classifier_regressor": asdict(p2_mode),
+        "P2_daily_scale_ref": asdict(p2_daily),
         "P3_temp_humidity_bucket": asdict(p3),
         "notes": {
             "baseline_best_thr": BEST_THR,

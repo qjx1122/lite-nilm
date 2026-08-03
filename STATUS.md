@@ -12,7 +12,8 @@
 - 已完成（2026-08-03 session 7）：**U842 Windows/沙盒 LightGBM active 但 best_thr=0.74 vs 0.57 跨平台差异定位 + v14.7 阈值稳定化修复** → `postprocess.search_best_threshold` val-only 近似同分容忍带 + Recall/Precision 定向 tie-break；LightGBM deterministic 单线程/col-wise；新增 `scripts/test_postprocess_threshold_stability.py`。
 - 已完成（2026-08-03 session 8）：**U842 训练/推理逐日 F1<90% 与 SAE>20% 异常日详析** → `U842_DAILY_FAILURE_ANALYSIS.md`；结论：训练侧无 ON 日 F1<90%，18 个 F1=0 均为 perfect-off 口径；训练 SAE>20% 3 天均为功率层；推理 ON 日 F1<90% 5 天（6/8、6/9、6/21、7/5、7/6），推理 SAE>20% 14 天，拆为分类漏检型/高功率低估型/低功率高估型。
 - 已完成（2026-08-03 session 9）：**U842 P1/P2/P3 三方案 train+val-only 离线优化验证** → `scripts/experiment_u842_p1_p2_p3.py` + `U842_P1_P2_P3_OPTIMIZATION_REPORT.md`；P1 高湿 recall guard (`RH>=88%, p_on>=0.45, 09-22h`) OOD F1 0.9144→0.9172、FN 202→195、SAE 14.60%→14.07%，主要改善 7/3、7/4；P2 daily power mode scale OOD SAE 14.60%→14.07% 但低功率高估日略恶化；P3 温湿桶 OOD SAE 14.60%→14.51% 收益过小。三者均未减少异常日数量，P1 可灰度，P2/P3 暂不建议生产上线。
-- 下一会话：待指派（候选：P0 no-positive day 报表口径 / P1 U842 recall guard 配置化灰度 / P2 U842 真正 mode_classifier+per-mode regressor / P3 补桶样本后重估 / P-CE1 泛化守卫 / P-CE5 guard 滑窗锚 / P-CE6 日报 coverage 列 / 8 月数据回流）
+- 已完成（2026-08-03 session 10）：**按用户要求重做 P2 为 `mode_classifier + per-mode regressor` 并验证** → `scripts/experiment_u842_p1_p2_p3.py` 更新 + `U842_P2_MODE_MODEL_REPORT.md`；模式阈值来自 train+val 真 ON 三分位 564.29/747.70W，RF classifier + per-mode RF regressor；test MAE 27.67→24.15W、SAE 3.62%→3.09%；inference MAE 108.07→103.46W、SAE 14.60%→14.07%、kWh_pred 192.09→193.27，但 SAE>20% 天数 14→15，6/8/7/6 分类整日漏检无效，6/19 低功率长时高估仍严重。结论：方向优于 daily scale，但需日级 loss-aware 目标 + 总线/段级模式特征后再作为生产候选。
+- 下一会话：待指派（候选：P0 no-positive day 报表口径 / P1 U842 recall guard 配置化灰度 / P2 日级 loss-aware mode model / P3 补桶样本后重估 / P-CE1 泛化守卫 / P-CE5 guard 滑窗锚 / P-CE6 日报 coverage 列 / 8 月数据回流）
 
 ## 已完成
 - [x] v14 收尾（session 1）：93 组 v14 单测全过 + symmetry 测试可移植性修复 + 烟测/工具链实测

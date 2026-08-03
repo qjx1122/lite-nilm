@@ -1,5 +1,7 @@
 # U842 P1/P2/P3 优化实验与验证效果分析
 
+> 更新说明：本报告保留 session 9 的 P1/P2/P3 对比结论；其中 P2 的 simple daily scale 已在 session 10 按用户要求重做为 `mode_classifier + per-mode regressor`，详见 `U842_P2_MODE_MODEL_REPORT.md`。生产判断以新 P2 报告为准。
+>
 > 分支：`arena/019fb816-lite-nilm`  
 > 基线：v14.7 U842 最新沙盒链，`ensemble_lgb_active=True`，`best_thr=0.57`。  
 > 实验脚本：`scripts/experiment_u842_p1_p2_p3.py`  
