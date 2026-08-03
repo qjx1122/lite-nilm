@@ -47,6 +47,12 @@
 - [x] **主交付**：5 用户 train/val/test + 推理(6月扩段+7月) 逐日合并视图生成器 `scripts/build_daily_train_infer_view.py`（SAE 比率口径修正 + 满采/缺口质量卡）；`V14_TRAIN_INFER_DAILY_ANALYSIS.md` 逐用户详析（训练侧/推理6月/推理7月分段 + 数据质量交叉 + 共性 CE1+/CE3+/NEW-Q1~Q4）
 - [x] **新证据链**：口径错位 FP 训练侧首发（U2844 val 6/4 FP12、test 5/22 FP6 ↔ 推理 6/28 FP38）；训练侧 SAE 离群日=推理档位失败前哨（U842 6/2→7/1-4；U0789 5/28→7/13-15）；U2844 8 个"全零无信息日"需单独归类；训练标签结构（无 OFF 日×3 用户/U0800 仅 6 天）决定推理失败模式
 
+## 已完成（session 6 U842 跨环境指标差异诊断）
+- [x] **用户截图（外来运行）U842 四行汇总 vs 本地 0479b12 链差异根因实锤 = 对方环境缺 LightGBM**：N 逐格全等（4490/1536/1440/2780 → 数据/窗口/target 完全一致）；受控复现 `pip uninstall lightgbm` 后单跑 U842 → test F1 0.9835748792 与截图 0.9835740 七位一致（=理论值 2·509/(2·509+2+15)），inference TN/FP=1364/13 逐格一致，FN 403 vs 421（±18 为库版本噪声），kWh_pred 159.8 vs 157.4；机理链：EnsembleClf 在无 lightgbm 时优雅退化为单 GBDT（lgb_weight=0.4 集成 → 单模型），best_thr 0.57→0.75，样本内几乎不动（train 仅 1 点），OOD 推理 Recall 0.856→0.70（FN 202→421 量级），kWh_pred 192→157（−18%）
+- [x] **meta 显形闸**：`model_meta.json` 新增 `clf_class` / `ensemble_lgb_active`（03_train.py L1205 附近，3 行零行为变化）＋ test_v14_enhancements T4.9/T4.y 2 断言；排查口诀：对比两边 model_meta.json 该字段即知是否同型
+- [x] 附注：截图 inference 行 status=`ok:main`（本地 `ok:main_final`）提示对方汇总组表器/代码版本亦偏旧；不影响根因判定
+- [x] 受控复现后已无损恢复：reinstall lightgbm + /tmp 备份还原 U842 artifacts/models，锚复核 7月 138.56/0.9322 [OK]
+
 ## 进行中
 - （无）
 

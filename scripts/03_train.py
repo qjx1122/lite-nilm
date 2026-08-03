@@ -1203,6 +1203,10 @@ def main():
             meta["temp_power_lut_note"] = "tuple keys (lo, hi) 已序列化为 'lo_hi' 字符串"
         # residual_calib 是对象, JSON 不可表达, 仅记录是否存在
         meta["residual_calib_present"] = bool(bundle.get("residual_calib"))
+        # [v14.6] 集成分类器形态显形: LightGBM 缺失时 EnsembleClf 静默退化为单
+        #  GBDT (跨环境指标漂移实证根因, 2026-08-03), 写入 meta 便于事后排查
+        meta["clf_class"] = type(clf).__name__
+        meta["ensemble_lgb_active"] = bool(getattr(clf, "lgb", None) is not None)
         with open(MODEL_DIR / "model_meta.json", "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2, ensure_ascii=False, default=str)
         log.info(f"  ✓ 组件拆分 + meta JSON 已保存")

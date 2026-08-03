@@ -252,11 +252,16 @@ if not HAS_LGB:
     ens2 = EnsembleClf(n_estimators=10, use_lgb=False)
     ens2.fit(X_tr, s_tr)
     check(ens2.predict(X_te).shape == (150,), "T4.8 use_lgb=False 显式降级可用")
+    # [v14.6] meta 显形旗标语义: ensemble_lgb_active = (clf.lgb is not None)
+    check((getattr(ens, "lgb", None) is not None) is False,
+          "T4.9 降级时 ensemble_lgb_active 旗标 = False (meta 可显形)")
 else:
     ens = EnsembleClf(n_estimators=30, max_depth=2, random_state=42, use_lgb=True)
     ens.fit(X_tr, s_tr)
     check(ens.lgb is not None and ens.predict(X_te).shape == (150,),
           "T4.x 环境有 lightgbm: 真集成路径基本可用")
+    check((getattr(ens, "lgb", None) is not None) is True,
+          "T4.y 集成可用时 ensemble_lgb_active 旗标 = True (meta 可显形)")
 
 # ============================================================
 # T5. EnsembleClf 概率融合数学 (stub lightgbm)
