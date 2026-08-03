@@ -10,7 +10,8 @@
 - 已完成（2026-08-03 session 5）：**5 用户逐日训练+推理评估指标 × 数据质量合并视图 + 逐用户详析** → 交付 `V14_TRAIN_INFER_DAILY_ANALYSIS.md` + `artifacts/daily_train_infer_metrics_view.md`；途中破获 **v14.6 陈旧 pyc 竞态事故**（见下）
 - 已完成（2026-08-03 session 5 续）：**5 用户汇总整体指标视图（分类×回归，训练×推理 micro-pooled）** → `scripts/build_overall_metrics_view.py` + `artifacts/overall_metrics_view.md`；池化口径与官方 `inference_metrics.csv` 逐位一致（Acc/F1 偏差 0.00000 交叉验证）；核心数字：分类 训练合并 F1=0.986 → 6月 0.744（P=0.625，FP=1646 虚块步）→ 7月 0.964；回归 训练 MAE 27.0W/SAE −3.8% → 6月 MAE 162.5W/+50.0% → 7月 124.1W/−15.1%
 - 已完成（2026-08-03 session 7）：**U842 Windows/沙盒 LightGBM active 但 best_thr=0.74 vs 0.57 跨平台差异定位 + v14.7 阈值稳定化修复** → `postprocess.search_best_threshold` val-only 近似同分容忍带 + Recall/Precision 定向 tie-break；LightGBM deterministic 单线程/col-wise；新增 `scripts/test_postprocess_threshold_stability.py`。
-- 下一会话：待指派（候选：P-CE1 泛化守卫 / P-CE5 guard 滑窗锚 / P-CE6 日报 coverage 列 / 8 月数据回流）
+- 已完成（2026-08-03 session 8）：**U842 训练/推理逐日 F1<90% 与 SAE>20% 异常日详析** → `U842_DAILY_FAILURE_ANALYSIS.md`；结论：训练侧无 ON 日 F1<90%，18 个 F1=0 均为 perfect-off 口径；训练 SAE>20% 3 天均为功率层；推理 ON 日 F1<90% 5 天（6/8、6/9、6/21、7/5、7/6），推理 SAE>20% 14 天，拆为分类漏检型/高功率低估型/低功率高估型。
+- 下一会话：待指派（候选：P0 no-positive day 报表口径 / P1 U842 低功率梅雨 recall guard / P2 U842 功率模式回归 / P-CE1 泛化守卫 / P-CE5 guard 滑窗锚 / P-CE6 日报 coverage 列 / 8 月数据回流）
 
 ## 已完成
 - [x] v14 收尾（session 1）：93 组 v14 单测全过 + symmetry 测试可移植性修复 + 烟测/工具链实测
