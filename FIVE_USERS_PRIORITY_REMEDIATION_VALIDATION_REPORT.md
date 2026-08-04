@@ -1,9 +1,10 @@
 # 5用户 P0→P4 优先级优化验证实验报告
 
-> 基于当前版本 5 用户批跑结果（`logs/_batch/batch_run_20260804_060918.log`），按上一轮建议的 P0→P4 顺序做离线验证。  
+> 基于当前版本 5 用户批跑结果（`logs/_batch/batch_run_20260804_070114.log`），按上一轮建议的 P0→P4 顺序做验证。  
 > 实验脚本：`scripts/experiment_5user_priority_remediation.py`  
 > 实验产物：`artifacts/five_user_priority_remediation/`  
-> 重要说明：P0/P2/P3 中的 branch-off / low-true guards 使用 inference branch 标签作为**诊断上限**，不是可直接生产的规则；生产化必须用 train/val-only 的 bus/branch 一致性信号选型。
+> 本轮代码修改：P4 日报监控字段已进入 `scripts/metrics_utils.py`，并已通过 5 用户 force-retrain 批跑验证，`inference_daily_metrics.csv` 现包含 `coverage_samples_96 / bus_coverage_288 / branch_coverage_96 / partial_day / no_positive_day / f1_lt_90_on / sae_gt_20_on`。  
+> 重要说明：P0/P2/P3 中的 branch-off / low-true guards 仍使用 inference branch 标签作为**诊断上限**，不是可直接生产的规则；生产化必须用 train/val-only 的 bus/branch 一致性信号选型。
 
 ---
 

@@ -504,6 +504,8 @@ def build_daily_metrics_rows(timestamps, y_true, y_pred, s_true, s_pred,
         MAE_W, RMSE_W, SAE, kWh_true, kWh_pred, kWh_err,
         TP, FP, FN, TN,
         is_on_day, off_day_fp, off_day_false_on_kWh, on_only_mae_w  ([v14.2] P7 口径),
+        coverage_samples_96, bus_coverage_288, branch_coverage_96,
+        partial_day, no_positive_day, f1_lt_90_on, sae_gt_20_on ([v14.8] P4 监控口径),
         [dataset (若 date_labels 提供)],
         [+ extra 字段]
     """
@@ -598,6 +600,23 @@ def build_daily_metrics_rows(timestamps, y_true, y_pred, s_true, s_pred,
         _on_only_mae = (float(np.mean(np.abs(yp[_on_mask] - yt[_on_mask])))
                         if _on_mask.any() else None)
 
+        # [v14.8] P4 生产化日报监控字段：
+        #   coverage_samples_96: 对齐后有效样本覆盖率 (15min 满日=96)
+        #   bus/branch coverage: 原始采集覆盖率 (总线5min满日=288, 分路15min满日=96)
+        #   no_positive_day: TP+FP+FN=0, 此时 F1=0 是 zero-division 口径, 非模型失败
+        #   f1_lt_90_on/sae_gt_20_on: 只在 ON 日标记异常, 避免 OFF 日污染告警
+        _coverage_samples_96 = float(n / 96.0) if n >= 0 else 0.0
+        _bus_coverage_288 = ""
+        if isinstance(n_bus_raw, int):
+            _bus_coverage_288 = round(float(n_bus_raw) / 288.0, 6)
+        _branch_coverage_96 = ""
+        if isinstance(n_branch_raw, int):
+            _branch_coverage_96 = round(float(n_branch_raw) / 96.0, 6)
+        _no_positive_day = int((tp + fp + fn) == 0)
+        _partial_day = int(_coverage_samples_96 < 0.90)
+        _f1_lt_90_on = int(bool(_is_on_day) and f1 < 0.90)
+        _sae_gt_20_on = int(bool(_is_on_day) and sae is not None and sae > 0.20)
+
         row = {
             "date": date_str,
             "split": split_name,
@@ -622,6 +641,13 @@ def build_daily_metrics_rows(timestamps, y_true, y_pred, s_true, s_pred,
             "off_day_false_on_kWh": _false_on_kwh,         # [v14.2]
             "on_only_mae_w": (round(_on_only_mae, 3)
                               if _on_only_mae is not None else ""),  # [v14.2]
+            "coverage_samples_96": round(_coverage_samples_96, 6),  # [v14.8 P4]
+            "bus_coverage_288": _bus_coverage_288,                  # [v14.8 P4]
+            "branch_coverage_96": _branch_coverage_96,              # [v14.8 P4]
+            "partial_day": _partial_day,                            # [v14.8 P4]
+            "no_positive_day": _no_positive_day,                    # [v14.8 P4]
+            "f1_lt_90_on": _f1_lt_90_on,                            # [v14.8 P4]
+            "sae_gt_20_on": _sae_gt_20_on,                          # [v14.8 P4]
         }
         if date_labels is not None:
             row["dataset"] = date_labels.get(date_str, "")
